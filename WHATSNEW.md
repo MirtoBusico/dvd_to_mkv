@@ -2,7 +2,7 @@
 
 ## 2026-11-14
 
-The November 11–14 update brings new ways to inspect and verify discs,
+The November 14 update brings new ways to inspect and verify discs,
 along with GUI reliability and copying-safety improvements.
 
 ### New tools and controls

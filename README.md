@@ -98,71 +98,67 @@ Start with:
 
 ## Standards and primary references
 
-These are the primary documents to consult when changing the formats, API
-contracts, or operating-system behavior used by this application. They are
-references for the implemented subset, not a claim that the application
-conforms to every feature in each specification.
+These are useful places to look when working on the disc formats, APIs, or
+system features the app uses. They're references, not a claim that the app
+supports every part of every specification.
 
 ### DVD, UDF, and media formats
 
 - [ECMA-167](https://ecma-international.org/publications-and-standards/standards/ecma-167/)
-  specifies the underlying volume and file structures used by UDF. Consult it
-  alongside the UDF profile actually being parsed.
+  explains the volume and file structures behind UDF. Read it alongside the
+  UDF version you're working with.
 - [ECMA TR/112: Universal Disk Format](https://ecma-international.org/publications-and-standards/technical-reports/ecma-tr-112/)
-  is the current Ecma UDF reference. Part 1 describes the general format;
-  Part 7 documents UDF 1.02. Use the other revision parts only when claiming
-  support for those revisions. Disc filesystem reading is delegated to
-  external tools; this repository does not include a UDF reader.
+  is the Ecma reference for UDF. Part 1 covers the general format, and Part 7
+  covers UDF 1.02. Check the relevant part before claiming support for another
+  version. The app relies on external tools to read disc filesystems; this
+  repository doesn't include its own UDF reader.
 - [ECMA-267](https://ecma-international.org/publications-and-standards/standards/ecma-267/)
-  describes the physical/data format of 120 mm DVD read-only discs. It does
-  not replace the DVD-Video application-layer specification.
+  explains the physical and data format of 120 mm DVD-ROM discs. For video
+  menus and navigation, you'll need the separate DVD-Video specification.
 - **DVD-Video application layer:** DVD Forum, *DVD Specifications for
-  Read-Only Disc, Part 3: Video Specifications*. This is the relevant
-  reference for IFO/VOB navigation and DVD-Video structures; access is
-  controlled. Do not treat ECMA-167 or ECMA-267 as a substitute.
-- **Blu-ray Disc formats:** use the applicable Blu-ray Disc Association
-  licensed specifications for claims about BD-ROM, playlist, transport-stream,
-  or MVC conformance. The GUI delegates disc inspection and copying to
-  `bluray_info`, `bluray_copy`, and FFmpeg; its MVC probe checks only the
-  documented sample and NAL-unit subset, not full-disc conformance.
+  Read-Only Disc, Part 3: Video Specifications*. This covers IFO/VOB
+  navigation and DVD-Video structures, but access is controlled. ECMA-167
+  and ECMA-267 aren't substitutes for it.
+- **Blu-ray Disc formats:** the relevant Blu-ray Disc Association
+  specifications are licensed. Consult them before making claims about
+  BD-ROM, playlists, transport streams, or MVC conformance. The app relies on
+  `bluray_info`, `bluray_copy`, and FFmpeg for inspection and copying; its MVC
+  probe checks a limited sample and set of NAL units, not the whole disc.
 - [ISO/IEC 13818-1:2025 (MPEG-2 Systems)](https://www.iso.org/standard/91403.html)
-  is a useful reference for MPEG transport/program streams used inside DVD and
-  Blu-ray media. For AVC/MVC bitstream claims, consult the applicable
-  [ISO/IEC 14496-10:2025](https://www.iso.org/standard/87574.html) edition.
-  These standards describe the media formats; the application relies on
-  FFmpeg and does not implement full decoders.
+  covers the MPEG transport and program streams used on DVDs and Blu-rays.
+  For AVC/MVC bitstreams, see
+  [ISO/IEC 14496-10:2025](https://www.iso.org/standard/87574.html). The app
+  relies on FFmpeg rather than implementing full decoders itself.
 
 ### GUI, runtime, and data interchange
 
 - [GTK 4 API reference](https://docs.gtk.org/gtk4/) and [Gtk.Accessible.announce](https://docs.gtk.org/gtk4/method.Accessible.announce.html)
-  define widget and accessibility API availability. `announce()` is available
-  since GTK 4.14, so code using it must remain compatible with older supported
-  GTK installations.
+  cover the widgets and accessibility APIs. `announce()` arrived in GTK 4.14,
+  so keep older supported GTK versions in mind when using it.
 - [GLib main event loop](https://docs.gtk.org/glib/main-loop.html) and
-  [GMainContext](https://docs.gtk.org/glib/struct.MainContext.html) document
-  event-source lifetime, dispatch, and thread/context behavior. Use these when
-  changing GTK-thread dispatch, timers, or worker completion notifications.
-- Python typing references: [PEP 484](https://peps.python.org/pep-0484/)
+  [GMainContext](https://docs.gtk.org/glib/struct.MainContext.html) explain
+  how events, callbacks, and contexts work. They're useful when changing
+  GTK-thread dispatch, timers, or worker completion notifications.
+- For Python typing, see [PEP 484](https://peps.python.org/pep-0484/)
   (type hints), [PEP 544](https://peps.python.org/pep-0544/)
   (protocols/structural subtyping), and
-  [PEP 695](https://peps.python.org/pep-0695/) (type-parameter syntax used by
-  the Python 3.14 code). These specify typing syntax and static-checker
-  contracts, not runtime validation.
-- [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) defines JSON used by
-  preferences and isolated helper-process messages.
-- [RFC 3629](https://www.rfc-editor.org/rfc/rfc3629) defines UTF-8, relevant
-  to JSON text and paths/messages explicitly encoded as UTF-8. UDF compressed
-  Unicode identifiers use the encoding rules in ECMA TR/112 instead.
+  [PEP 695](https://peps.python.org/pep-0695/) (type-parameter syntax).
+  These help with type checking; they don't validate data at runtime.
+- [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) describes JSON, which the
+  app uses for preferences and messages between helper processes.
+- [RFC 3629](https://www.rfc-editor.org/rfc/rfc3629) describes UTF-8, used for
+  JSON and for paths or messages explicitly encoded as UTF-8. UDF compressed
+  Unicode identifiers follow ECMA TR/112 instead.
 - [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/)
-  defines `$XDG_CONFIG_HOME`, used to locate GUI preferences.
+  explains `$XDG_CONFIG_HOME`, which the GUI uses to find its preferences.
 
 ### Linux and filesystem behavior
 
 - [POSIX.1-2024 / The Open Group Base Specifications Issue 8](https://pubs.opengroup.org/onlinepubs/9799919799/)
-  is the reference for portable file and process interfaces where the
-  application relies on POSIX behavior.
-- Linux-specific behavior is outside POSIX. Consult the relevant
-  [Linux man-pages](https://man7.org/linux/man-pages/) for `/proc` descriptor
-  paths, `memfd_create`, block-device ioctls, `fsync`, and related calls.
-  Output pinning, block-device sizing, and subprocess argument spooling
-  intentionally depend on Linux facilities.
+  covers portable file and process interfaces used where the app relies on
+  POSIX behavior.
+- For Linux-specific features, see the
+  [Linux man-pages](https://man7.org/linux/man-pages/), including `/proc`
+  descriptor paths, `memfd_create`, block-device ioctls, and `fsync`. Output
+  pinning, block-device sizing, and subprocess argument spooling deliberately
+  rely on Linux rather than POSIX alone.

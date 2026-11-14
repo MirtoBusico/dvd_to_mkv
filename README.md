@@ -110,8 +110,9 @@ supports every part of every specification.
 - [ECMA TR/112: Universal Disk Format](https://ecma-international.org/publications-and-standards/technical-reports/ecma-tr-112/)
   is the Ecma reference for UDF. Part 1 covers the general format, and Part 7
   covers UDF 1.02. Check the relevant part before claiming support for another
-  version. The app relies on external tools to read disc filesystems; this
-  repository doesn't include its own UDF reader.
+  version. The repository also includes a UDF reader in `dvdvideo/udf/`: it
+  handles a bounded subset and explicitly rejects unsupported allocation forms.
+  The MKV app itself relies on external tools to read disc filesystems.
 - [ECMA-267](https://ecma-international.org/publications-and-standards/standards/ecma-267/)
   explains the physical and data format of 120 mm DVD-ROM discs. For video
   menus and navigation, you'll need the separate DVD-Video specification.

@@ -1,5 +1,20 @@
 """GTK-independent parsing of bounded inspection listings."""
 
+# @copyright: 2026 libertypo <libertypo@proton.me>
+# @license: GNU GPL-3
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 import re
 from dataclasses import dataclass, field
 
@@ -113,11 +128,11 @@ def parse_dvd_streams(output: str) -> Listing:
             listing.duplicates += 1
             continue
         seen.add(identifier)
+        listing.tracks.append(TrackInfo(identifier, kind, language))
         if len(listing.rows) >= MAX_INSPECTION_ROWS:
             listing.truncated = True
             listing.omitted_ids.add(identifier)
             continue
-        listing.tracks.append(TrackInfo(identifier, kind, language))
         listing.rows.append((identifier, f"Stream {identifier}  {details}"))
     return listing
 
@@ -158,10 +173,10 @@ def parse_bluray_streams(output: str) -> Listing:
             listing.duplicates += 1
             continue
         seen.add(identifier)
+        listing.tracks.append(TrackInfo(identifier, kind, fields[3].strip().lower()))
         if len(listing.rows) >= MAX_STREAM_ROWS:
             listing.truncated = True
             listing.omitted_ids.add(identifier)
             continue
         listing.rows.append((identifier, "  ".join(value for value in fields[1:] if value)))
-        listing.tracks.append(TrackInfo(identifier, kind, fields[3].strip().lower()))
     return listing

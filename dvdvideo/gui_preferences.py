@@ -1,3 +1,18 @@
+# @copyright: 2026 libertypo <libertypo@proton.me>
+# @license: GNU GPL-3
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 # Keep ValueError for invalid persisted data and the GUI's existing validation contract.
 # ruff: noqa: TRY004
 
@@ -6,18 +21,26 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
-from dvdvideo.gui_preferences_io import write_preferences
+from dvdvideo.gui_preferences_io import (
+    MAX_PREFERENCES_BYTES,
+    PreferencesDurabilityError,
+    PreferenceSnapshot,
+    write_preferences,
+)
 
 DEFAULT_PROFILE_NAME = "Default"
 VALID_OUTPUT_FORMATS = frozenset({"auto", "mkv", "m2ts"})
 LANGUAGE_CODE = re.compile(r"[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*")
 STREAM_PID = re.compile(r"0[xX]0{0,4}[0-9a-fA-F]{1,4}")
 MAX_STREAM_PID = 0x1FFF
+ISO_LANGUAGE_CODES = Path("/usr/share/iso-codes/json/iso_639-2.json")
 
 
 def _new_string_list() -> list[str]:
@@ -81,6 +104,15 @@ def _normalize_source(preferences: SourcePreferences) -> SourcePreferences:
     )
 
 
+def _copy_source(preferences: SourcePreferences) -> SourcePreferences:
+    return replace(
+        preferences,
+        dvd_streams=list(preferences.dvd_streams),
+        playlists=list(preferences.playlists),
+        playlist_streams={key: list(value) for key, value in preferences.playlist_streams.items()},
+    )
+
+
 def parse_language_codes(value: str) -> tuple[str, ...]:
     codes: list[str] = []
     for candidate in value.split(","):
@@ -94,15 +126,55 @@ def parse_language_codes(value: str) -> tuple[str, ...]:
     return tuple(codes)
 
 
+@lru_cache(maxsize=1)
+def language_aliases() -> dict[str, str]:
+    try:
+        data: object = json.loads(ISO_LANGUAGE_CODES.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("expected an object")
+        records: object = cast(dict[str, object], data).get("639-2")
+        if not isinstance(records, list):
+            raise ValueError("expected a 639-2 list")
+        aliases: dict[str, str] = {}
+        for value in cast(list[object], records):
+            if not isinstance(value, dict):
+                raise ValueError("expected a language record")
+            record = cast(dict[str, object], value)
+            canonical = record.get("alpha_3")
+            if canonical == "qaa-qtz" and "alpha_2" not in record and "bibliographic" not in record:
+                continue
+            if not isinstance(canonical, str) or re.fullmatch(r"[a-z]{3}", canonical) is None:
+                raise ValueError("invalid three-letter language code")
+            for key in ("alpha_2", "bibliographic"):
+                alias = record.get(key)
+                if alias is not None:
+                    if not isinstance(alias, str) or re.fullmatch(r"[a-z]{2,3}", alias) is None:
+                        raise ValueError("invalid language alias")
+                    aliases[alias] = canonical
+        if not aliases:
+            raise ValueError("no language aliases")
+        return aliases
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Cannot load ISO language codes from {ISO_LANGUAGE_CODES}: {error}") from error
+
+
+def canonical_language(code: str, aliases: dict[str, str]) -> str:
+    primary, separator, suffix = code.lower().partition("-")
+    return aliases.get(primary, primary) + separator + suffix
+
+
 def select_tracks(profile: Profile, tracks: list[TrackInfo]) -> list[str]:
-    audio_languages = {language.lower() for language in profile.audio_languages}
-    subtitle_languages = {language.lower() for language in profile.subtitle_languages}
+    if not profile.audio_languages and not profile.subtitle_languages:
+        return []
+    aliases = language_aliases()
+    audio_languages = {canonical_language(language, aliases) for language in profile.audio_languages}
+    subtitle_languages = {canonical_language(language, aliases) for language in profile.subtitle_languages}
     if not audio_languages and not subtitle_languages:
         return []
     selected: list[str] = []
     for track in tracks:
         kind = track.kind.lower()
-        language = track.language.lower()
+        language = canonical_language(track.language, aliases)
         if (
             kind == "video"
             or (kind == "audio" and language in audio_languages)
@@ -114,14 +186,23 @@ def select_tracks(profile: Profile, tracks: list[TrackInfo]) -> list[str]:
 
 def _preferences_path() -> Path:
     config_home = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(config_home).expanduser() if config_home else Path.home() / ".config"
+    candidate = Path(config_home).expanduser() if config_home else None
+    root = candidate if candidate is not None and candidate.is_absolute() else Path.home() / ".config"
     return root / "dvd-to-mkv-gui" / "preferences.json"
 
 
+def reusable_source(source: str) -> bool:
+    # A device path identifies a drive, not the disc currently inserted in it.
+    path = os.path.abspath(source)
+    return path != "/dev" and not path.startswith("/dev/")
+
+
 class PreferencesStore:
+    MAX_PREFERENCES_BYTES = MAX_PREFERENCES_BYTES
+
     def __init__(
         self, path: Path | None = None,
-        writer: Callable[[Path, dict[str, Any]], None] | None = None,
+        writer: Callable[[Path, PreferenceSnapshot], None] | None = None,
     ) -> None:
         self.path = path or _preferences_path()
         self.writer = writer
@@ -129,7 +210,9 @@ class PreferencesStore:
             DEFAULT_PROFILE_NAME: Profile(),
         }
         self.active_profile = DEFAULT_PROFILE_NAME
-        self.sources: dict[str, SourcePreferences] = {}
+        self._sources: dict[str, SourcePreferences] = {}
+        self.device_sources: set[str] = set()
+        language_aliases()
         self._load()
 
     @staticmethod
@@ -140,11 +223,17 @@ class PreferencesStore:
     def profile_names(self) -> list[str]:
         return list(self.profiles)
 
+    @property
+    def sources(self) -> dict[str, SourcePreferences]:
+        return {key: _copy_source(value) for key, value in self._sources.items()}
+
     def get_profile(self, name: str | None = None) -> Profile:
         selected_name = name or self.active_profile
         return self.profiles.get(selected_name, self.profiles[DEFAULT_PROFILE_NAME])
 
-    def save_profile(self, profile: Profile) -> None:
+    def save_profile(
+        self, profile: Profile, *, previous_name: str | None = None, activate: bool = False,
+    ) -> None:
         name = _validated_string(profile.name, "Profile name").strip()
         _validate_profile_name(name)
         output_format = _validated_string(profile.output_format, "Output format")
@@ -158,15 +247,35 @@ class PreferencesStore:
             output_format,
             minimum_minutes,
         )
-        previous = self.profiles.get(name)
+        if previous_name is not None and previous_name not in self.profiles:
+            raise ValueError(f"Profile does not exist: {previous_name}")
+        renaming = previous_name is not None and previous_name != name
+        if renaming and previous_name == DEFAULT_PROFILE_NAME:
+            raise ValueError("The Default profile cannot be renamed; use New to create another profile.")
+        if renaming and name in self.profiles:
+            raise ValueError("A profile with that name already exists; select it to edit it.")
+        profiles = self.profiles.copy()
+        active_profile = self.active_profile
+        sources = self._sources.copy()
+        if renaming:
+            assert previous_name is not None
+            del self.profiles[previous_name]
+            if self.active_profile == previous_name:
+                self.active_profile = name
+            for key, source in self._sources.items():
+                if source.profile_name == previous_name:
+                    self._sources[key] = replace(source, profile_name=name)
         self.profiles[name] = profile
+        if activate:
+            self.active_profile = name
         try:
             self._write()
+        except PreferencesDurabilityError:
+            raise
         except Exception:
-            if previous is None:
-                del self.profiles[name]
-            else:
-                self.profiles[name] = previous
+            self.profiles = profiles
+            self.active_profile = active_profile
+            self._sources = sources
             raise
 
     def delete_profile(self, name: str) -> None:
@@ -176,22 +285,21 @@ class PreferencesStore:
             raise ValueError(f"Profile does not exist: {name}")
         profiles = self.profiles.copy()
         active_profile = self.active_profile
-        source_profiles = {
-            key: source.profile_name for key, source in self.sources.items()
-        }
+        sources = self._sources.copy()
         del self.profiles[name]
         if self.active_profile == name:
             self.active_profile = DEFAULT_PROFILE_NAME
-        for source in self.sources.values():
+        for key, source in self._sources.items():
             if source.profile_name == name:
-                source.profile_name = DEFAULT_PROFILE_NAME
+                self._sources[key] = replace(source, profile_name=DEFAULT_PROFILE_NAME)
         try:
             self._write()
+        except PreferencesDurabilityError:
+            raise
         except Exception:
             self.profiles = profiles
             self.active_profile = active_profile
-            for key, profile_name in source_profiles.items():
-                self.sources[key].profile_name = profile_name
+            self._sources = sources
             raise
 
     def set_active_profile(self, name: str) -> None:
@@ -201,12 +309,20 @@ class PreferencesStore:
         self.active_profile = name
         try:
             self._write()
+        except PreferencesDurabilityError:
+            raise
         except Exception:
             self.active_profile = previous
             raise
 
     def get_source(self, source: str) -> SourcePreferences | None:
-        return self.sources.get(self.source_key(source))
+        if not reusable_source(source) or self.source_key(source) in self.device_sources:
+            return None
+        preferences = self._sources.get(self.source_key(source))
+        return _copy_source(preferences) if preferences is not None else None
+
+    def exclude_device_source(self, source: str) -> None:
+        self.device_sources.add(self.source_key(source))
 
     def save_source(self, source: str, preferences: SourcePreferences) -> None:
         profile_name = _validated_string(preferences.profile_name, "profile_name")
@@ -223,24 +339,57 @@ class PreferencesStore:
         preferences = _normalize_source(preferences)
 
         key = self.source_key(source)
-        previous = self.sources.get(key)
-        self.sources[key] = preferences
+        if not reusable_source(source) or key in self.device_sources:
+            if key in self._sources:
+                previous = self._sources.pop(key)
+                try:
+                    self._write()
+                except PreferencesDurabilityError:
+                    raise
+                except Exception:
+                    self._sources[key] = previous
+                    raise
+            return
+        previous = self._sources.get(key)
+        self._sources[key] = preferences
         try:
             self._write()
+        except PreferencesDurabilityError:
+            raise
         except Exception:
             if previous is None:
-                del self.sources[key]
+                del self._sources[key]
             else:
-                self.sources[key] = previous
+                self._sources[key] = previous
             raise
 
     def _load(self) -> None:
+        descriptor = -1
         try:
-            content = self.path.read_text(encoding="utf-8")
+            descriptor = os.open(
+                self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC,
+            )
         except FileNotFoundError:
             return
         try:
-            data = json.loads(content)
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("preferences path is not a regular file")
+            if info.st_size > self.MAX_PREFERENCES_BYTES:
+                raise ValueError("preferences file exceeds the 4 MiB limit")
+            with os.fdopen(descriptor, "rb") as file:
+                descriptor = -1
+                content = file.read(self.MAX_PREFERENCES_BYTES + 1)
+            if len(content) > self.MAX_PREFERENCES_BYTES:
+                raise ValueError("preferences file exceeds the 4 MiB limit")
+            text = content.decode("utf-8")
+        except (OSError, ValueError) as error:
+            raise ValueError(f"Cannot read GUI preferences at {self.path}: {error}") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        try:
+            data = json.loads(text)
             self._read_data(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
             raise ValueError(f"Cannot read GUI preferences at {self.path}: {error}") from error
@@ -285,28 +434,35 @@ class PreferencesStore:
                 raise ValueError(f"invalid source settings for {key}")
             if settings.profile_name not in loaded_profiles:
                 settings.profile_name = DEFAULT_PROFILE_NAME
-            self.sources[key] = _normalize_source(settings)
+            self._sources[key] = _normalize_source(settings)
 
     def _write(self) -> None:
-        data: dict[str, Any] = {
-            "version": 1,
-            "active_profile": self.active_profile,
-            "profiles": [
-                {
-                    "name": profile.name,
-                    "audio_languages": list(profile.audio_languages),
-                    "subtitle_languages": list(profile.subtitle_languages),
-                    "output_format": profile.output_format,
-                    "minimum_minutes": profile.minimum_minutes,
-                }
-                for profile in self.profiles.values()
-            ],
-            "sources": {
-                key: asdict(value)
-                for key, value in self.sources.items()
-            },
-        }
-        (self.writer or write_preferences)(self.path, data)
+        active_profile = self.active_profile
+        profiles = tuple(self.profiles.values())
+        # Stored records are replaced, never mutated or exposed to callers.
+        sources = self._sources.copy()
+
+        def snapshot() -> dict[str, Any]:
+            return {
+                "version": 1,
+                "active_profile": active_profile,
+                "profiles": [
+                    {
+                        "name": profile.name,
+                        "audio_languages": list(profile.audio_languages),
+                        "subtitle_languages": list(profile.subtitle_languages),
+                        "output_format": profile.output_format,
+                        "minimum_minutes": profile.minimum_minutes,
+                    }
+                    for profile in profiles
+                ],
+                "sources": {key: asdict(value) for key, value in sources.items()},
+            }
+
+        if self.writer is not None:
+            self.writer(self.path, snapshot)
+        else:
+            write_preferences(self.path, snapshot())
 
 
 def _required_str(item: dict[str, Any], key: str) -> str:

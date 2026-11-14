@@ -1,5 +1,20 @@
 """GTK-independent process supervision and output validation for the GUI."""
 
+# @copyright: 2026 libertypo <libertypo@proton.me>
+# @license: GNU GPL-3
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 
 import codecs
@@ -10,10 +25,40 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import ExitStack, contextmanager
 
 MAX_INSPECTION_BYTES = 8 * 1024 * 1024
 TERMINATION_GRACE = 3
+MAX_DIRECT_ARGUMENT_BYTES = 64 * 1024
+_unreaped_helpers: set[subprocess.Popen[bytes]] = set()
+_unreaped_lock = threading.Lock()
+
+
+def _reap_helper(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.wait()
+    finally:
+        with _unreaped_lock:
+            _unreaped_helpers.discard(process)
+
+
+@contextmanager
+def copy_command_arguments(command: list[str]) -> Generator[tuple[list[str], tuple[int, ...]]]:
+    size = sum(len(os.fsencode(argument)) + 1 + 8 for argument in command)
+    if size <= MAX_DIRECT_ARGUMENT_BYTES:
+        yield command, ()
+        return
+    with os.fdopen(os.memfd_create("dvd-to-mkv-arguments", os.MFD_CLOEXEC), "wb") as file:
+        for argument in command[1:]:
+            encoded = os.fsencode(argument)
+            if b"\0" in encoded:
+                raise ValueError("Command arguments cannot contain NUL bytes.")
+            file.write(encoded + b"\0")
+        file.write(b"--end-arguments-file\0")
+        file.flush()
+        path = f"/proc/self/fd/{file.fileno()}"
+        yield [command[0], "--arguments-file", path], (file.fileno(),)
 
 
 def filename_stem(name: str) -> str:
@@ -52,7 +97,27 @@ class ManagedProcess:
             return False
         return True
 
-    def stop_group(self) -> None:
+    def abandon_process(self, notify: Callable[[str], None] | None) -> None:
+        assert self.process is not None
+        process = self.process
+        with _unreaped_lock:
+            _unreaped_helpers.add(process)
+        try:
+            threading.Thread(target=_reap_helper, args=(process,), daemon=True).start()
+        except RuntimeError as error:
+            raise RuntimeError(
+                "Could not start the filesystem helper cleanup thread; "
+                "the helper may remain until the application exits."
+            ) from error
+        if notify:
+            notify(
+                "Helper did not exit after termination; cleanup may be delayed. "
+                "Descendants in other process groups may remain.\n"
+            )
+
+    def stop_group(
+        self, *, abandon_unresponsive: bool = False, notify: Callable[[str], None] | None = None,
+    ) -> None:
         assert self.process is not None
         self.send_signal(signal.SIGTERM)
         deadline = time.monotonic() + TERMINATION_GRACE
@@ -63,13 +128,30 @@ class ManagedProcess:
             time.sleep(0.05)
         if self.group_exists():
             self.send_signal(signal.SIGKILL)
+        if abandon_unresponsive:
+            deadline = time.monotonic() + 0.2
+            while self.process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if self.process.poll() is None:
+                self.abandon_process(notify)
+                return
         self.process.wait()
 
     def run(
         self, command: list[str], collect: bool = True,
         log: Callable[[str], None] | None = None, timeout: float | None = None,
+        *, input_data: bytes | None = None, stderr_log: Callable[[str], None] | None = None,
+        abandon_unresponsive: bool = False, pass_fds: tuple[int, ...] = (),
+        termination_log: Callable[[str], None] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.check_cancelled()
+        if abandon_unresponsive:
+            with _unreaped_lock:
+                if _unreaped_helpers:
+                    raise RuntimeError(
+                        "A previous filesystem helper, copier, preview, or inspection is still terminating; "
+                        "wait for its filesystem to respond."
+                    )
         output: list[str] = []
         errors: list[str] = []
         size = 0
@@ -78,38 +160,89 @@ class ManagedProcess:
         terminating = None
         timed_out = False
         cleaned = False
+        pipes_abandoned = False
+        input_incomplete = False
+        input_offset = 0
         decoders = {
             channel: codecs.getincrementaldecoder("utf-8")(errors="replace")
             for channel in ("stdout", "stderr")
         }
         self.process = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, start_new_session=True,
+            stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL, start_new_session=True,
+            pass_fds=pass_fds,
         )
         try:
             assert self.process.stdout is not None
             assert self.process.stderr is not None
-            with self.process.stdout as stdout, self.process.stderr as stderr, selectors.DefaultSelector() as selector:
+            with ExitStack() as stack:
+                stdout = stack.enter_context(self.process.stdout)
+                stderr = stack.enter_context(self.process.stderr)
+                selector = stack.enter_context(selectors.DefaultSelector())
                 selector.register(stdout, selectors.EVENT_READ, "stdout")
                 selector.register(stderr, selectors.EVENT_READ, "stderr")
+                stdin = stack.enter_context(self.process.stdin) if self.process.stdin is not None else None
+                if stdin is not None:
+                    os.set_blocking(stdin.fileno(), False)
+                    if input_data:
+                        selector.register(stdin, selectors.EVENT_WRITE, "stdin")
+                    else:
+                        stdin.close()
                 while selector.get_map() or self.process.poll() is None:
                     now = time.monotonic()
                     timed_out = timed_out or (timeout is not None and now - started >= timeout)
                     if (self.cancelled.is_set() or timed_out) and terminating is None:
                         self.send_signal(signal.SIGTERM)
                         terminating = now
-                    if self.process.poll() is not None and self.group_exists() and terminating is None:
-                        if log:
-                            log("Stopping subprocess descendants remaining after command exit.\n")
-                        self.send_signal(signal.SIGTERM)
+                        if stdin is not None and not stdin.closed:
+                            selector.unregister(stdin)
+                            stdin.close()
+                    if self.process.poll() is not None and terminating is None:
+                        if self.group_exists():
+                            if log:
+                                log("Stopping subprocess descendants remaining after command exit.\n")
+                            self.send_signal(signal.SIGTERM)
                         terminating = now
                     if terminating is not None and now - terminating >= TERMINATION_GRACE:
                         self.send_signal(signal.SIGKILL)
+                        if (abandon_unresponsive and self.process.poll() is None
+                                and now - terminating >= TERMINATION_GRACE + 0.2):
+                            cleaned = True
+                            self.abandon_process(termination_log or log or stderr_log)
+                            if timed_out and timeout is not None:
+                                raise subprocess.TimeoutExpired(command, timeout)
+                            self.check_cancelled()
+                            raise RuntimeError("Helper did not exit after termination.")
+                        if self.process.poll() is not None and now - terminating >= TERMINATION_GRACE + 0.2:
+                            pipes_abandoned = any(key.data != "stdin" for key in selector.get_map().values())
+                            warning_log = termination_log or log or stderr_log
+                            if pipes_abandoned and warning_log:
+                                warning_log(
+                                    "Stopped waiting for output pipes held open after process termination; "
+                                    "a detached descendant may still be running outside the managed process group.\n"
+                                )
+                            break
                     for key, _events in selector.select(0.1):
+                        if key.data == "stdin":
+                            assert input_data is not None and stdin is not None
+                            try:
+                                input_offset += os.write(key.fd, input_data[input_offset:input_offset + 65536])
+                            except BlockingIOError:
+                                continue
+                            except BrokenPipeError:
+                                input_incomplete = True
+                                selector.unregister(stdin)
+                                stdin.close()
+                                continue
+                            if input_offset == len(input_data):
+                                selector.unregister(stdin)
+                                stdin.close()
+                            continue
                         data = os.read(key.fd, 8192)
                         text = decoders[key.data].decode(data, final=not data).replace("\r", "\n").replace("\x00", "")
-                        if log and text:
-                            log(text)
+                        callback = stderr_log if key.data == "stderr" and stderr_log is not None else log
+                        if callback and text:
+                            callback(text)
                         if collect and key.data == "stdout":
                             size += len(data)
                             if size > MAX_INSPECTION_BYTES:
@@ -127,6 +260,10 @@ class ManagedProcess:
             if timed_out and timeout is not None:
                 raise subprocess.TimeoutExpired(command, timeout)
             self.check_cancelled()
+            if pipes_abandoned:
+                raise RuntimeError("Subprocess output pipes remained open after termination; output is incomplete.")
+            if input_incomplete and returncode == 0:
+                raise RuntimeError("Subprocess closed its input before receiving the complete request.")
             if self.group_exists():
                 if log:
                     log("Stopping subprocess descendants remaining after command exit.\n")
@@ -135,7 +272,10 @@ class ManagedProcess:
             return subprocess.CompletedProcess(command, returncode, "".join(output), "".join(errors))
         finally:
             if not cleaned and (self.process.poll() is None or self.group_exists()):
-                self.stop_group()
+                self.stop_group(
+                    abandon_unresponsive=abandon_unresponsive,
+                    notify=termination_log or log or stderr_log,
+                )
 
 
 def validate_output_paths(

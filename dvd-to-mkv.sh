@@ -41,6 +41,7 @@ Auto preserves all streams as M2TS when MVC payload is verified in a playlist sa
 M2TS output does not support --stream-id filtering and requires a .m2ts filename or directory.
 Blu-ray MKV copies embed the original playlist chapters. Original M2TS copies export
 chapter markers to OUTPUT.m2ts.chapters.txt (OGM chapter format), without altering the video.
+Blu-ray MKV audio/subtitle language tags are restored from playlist metadata by PID.
 Copies require python3 for a conservative free-space check before each attempt.
 The output filesystem must support hard links for safe publication; this is
 checked before copying. GNU sync -f flushes published output before success.
@@ -770,9 +771,11 @@ if [[ $media_type == bluray ]]; then
     for playlist in "${selected_playlists[@]}"; do
         IFS= read -r -d '' playlist_output < <(playlist_output_path "$playlist")
         map_args=()
+        language_pid_args=()
         for selection in "${selected_stream_ids[@]}"; do
             if [[ ${selection%%:*} == "$playlist" ]]; then
                 map_args+=(-map "0:i:${selection#*:}")
+                language_pid_args+=(--pid "${selection#*:}")
             fi
         done
         if [[ ${#map_args[@]} -eq 0 ]]; then
@@ -782,10 +785,18 @@ if [[ $media_type == bluray ]]; then
         chapter_metadata=$temporary_directory/chapters.ffmetadata
         chapter_sidecar=$temporary_directory/chapters.txt
         copy_size_file=$temporary_directory/copy-size
+        playlist_metadata=$temporary_directory/playlist.json
+        language_args_file=$temporary_directory/language-args
+        stream_metadata_file=$temporary_directory/streams.json
+        language_validation_args=()
+        if [[ ${playlist_formats[$playlist]} == mkv ]]; then
+            language_validation_args=(--validate-languages)
+        fi
         chapter_count=$(bluray_info "$device" "${keydb_args[@]}" --playlist "$playlist" --chapters --json |
+            tee "$playlist_metadata" |
             PYTHONPATH="$python_module_path" \
                 "$python_command" -P -m dvdvideo.bluray_chapters "$playlist" "$chapter_metadata" "$chapter_sidecar" \
-                    --size-file "$copy_size_file")
+                    --size-file "$copy_size_file" "${language_validation_args[@]}")
         expected_copy_bytes=$(<"$copy_size_file")
         echo "Playlist $playlist: imported $chapter_count chapter marker(s)." >&2
         attempt=0
@@ -803,9 +814,19 @@ if [[ $media_type == bluray ]]; then
                 elif [[ ${playlist_formats[$playlist]} == m2ts ]]; then
                     temporary_output=$temporary_copy
                     copy_valid=true
-                elif ffmpeg -nostdin -y -xerror -i "$temporary_copy" -f ffmetadata -i "$chapter_metadata" \
-                    "${map_args[@]}" -map_chapters 1 -c copy "$temporary_output"; then
-                    copy_valid=true
+                elif ffprobe -v error -show_entries stream=id,codec_type -of json "$temporary_copy" \
+                    > "$stream_metadata_file"; then
+                    if ! PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.bluray_chapters \
+                        language-args "$playlist" "$playlist_metadata" "$language_args_file" \
+                        "${language_pid_args[@]}" < "$stream_metadata_file"; then
+                        echo "Playlist $playlist: invalid language/stream metadata; retrying the copy cannot repair it." >&2
+                        exit 1
+                    fi
+                    mapfile -d '' -t language_args < "$language_args_file"
+                    if ffmpeg -nostdin -y -xerror -i "$temporary_copy" -f ffmetadata -i "$chapter_metadata" \
+                        "${map_args[@]}" -map_chapters 1 "${language_args[@]}" -c copy "$temporary_output"; then
+                        copy_valid=true
+                    fi
                 fi
             fi
             if [[ $copy_valid == true ]] \

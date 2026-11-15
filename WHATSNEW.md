@@ -1,5 +1,15 @@
 # What's new
 
+## 2026-11-15
+
+- Fixed missing language labels in newly copied Blu-ray MKVs: audio and subtitle
+  tracks now keep the disc's three-letter language codes, matched by stream PID.
+  This works with selected tracks, copy-all, and shared-PID companion tracks.
+- Missing disc language codes produce a warning rather than guessed labels.
+  Invalid language metadata stops the copy instead of repeatedly recopying it.
+  Existing MKVs are not repaired, and original M2TS output is unchanged.
+- Source update only; the bundled package has not been rebuilt.
+
 ## 2026-11-14
 
 The November 14 update brings new ways to inspect and verify discs,

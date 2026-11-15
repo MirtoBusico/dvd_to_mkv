@@ -1,5 +1,63 @@
 # What's new
 
+## 2026-11-15
+
+- Fixed missing language labels in newly copied Blu-ray MKVs: audio and subtitle
+  tracks now keep the disc's three-letter language codes, matched by stream PID.
+  This works with selected tracks, copy-all, and shared-PID companion tracks.
+- Missing disc language codes produce a warning rather than guessed labels.
+  Invalid language metadata stops the copy instead of repeatedly recopying it.
+  Existing MKVs are not repaired, and original M2TS output is unchanged.
+- The Manjaro/Arch package has been rebuilt as `2026.11.15-1`.
+
+## 2026-11-14
+
+The November 14 update brings new ways to inspect and verify discs,
+lots of bug squashing, and improvements to GUI reliability and copying safety.
+
+### New tools and controls
+
+- **Verify Copy** compares an existing MKV or M2TS with a reference copied
+  from the original source. It is optional, rereads the source, and needs
+  temporary disk space. A failed check does not necessarily mean the copy is
+  corrupt.
+- **Preview** plays directly from a DVD or a selected Blu-ray playlist using
+  FFplay. It does not apply the copy's track selection or provide 3D playback.
+- The GUI discovers optical drives and offers a refresh action after disc
+  changes. It does not automatically select a drive.
+- **Clear All** resets the workspace while keeping saved profiles and source
+  choices.
+- A Manjaro/Arch package is included, with an application-menu entry.
+
+### More reliable workflows
+
+- Preference loading and saving run in the background. The GUI reports errors
+  and offers choices if loading or shutdown takes longer than expected.
+- Source detection, inspection, copying, and shutdown handle cancellation and
+  stale results more carefully. Stalled filesystem helpers can be abandoned
+  after forced termination; cleanup may be delayed.
+- Drive refresh, reinspections, and profile changes handle saved and pending
+  selections more consistently. Changes from a previous disc are not reused
+  merely because a different disc was inserted into the same drive.
+- Wide pane handles prevent divider drag areas from intercepting clicks on
+  nearby controls.
+- The GUI rejects symbolic links inside DVD and Blu-ray disc folders as well
+  as links to the source itself. Links to optical devices remain supported.
+
+### Safer copying and verification
+
+- Verification stages its temporary reference beside the existing copy by
+  default, so the copier checks space on that filesystem. Set `TMPDIR` to use
+  a different staging filesystem.
+- Before copying, the CLI checks that the output filesystem supports hard
+  links and that GNU `sync` supports filesystem flushing. It flushes published
+  output before reporting success; existing files are still not overwritten.
+- Blu-ray key databases must be owned by the current user or root and have
+  no group or other permissions.
+
+Physical optical-drive and encrypted-disc testing, and full-movie 3D
+playback validation, remain outstanding.
+
 ## 2026-11-10
 
 Saved profiles, remembered track choices, and better handling of Blu-ray

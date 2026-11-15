@@ -1,5 +1,20 @@
 """Identify MVC payload in a bounded sample of a Blu-ray transport stream."""
 
+# @copyright: 2026 libertypo <libertypo@proton.me>
+# @license: GNU GPL-3
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 import collections
 import re
 import sys
@@ -7,24 +22,32 @@ import sys
 SAMPLE_BYTES = 16 * 1024 * 1024
 
 
+def _duplicate_packet(packet: bytes, previous: bytes) -> bool:
+    has_pcr = (packet[3] >> 4) & 2 and packet[4] >= 7 and packet[5] & 0x10
+    # MPEG transport duplicates may carry an updated PCR, but no other changes.
+    return (
+        packet[:6] == previous[:6] and packet[12:] == previous[12:]
+        if has_pcr else packet == previous
+    )
+
+
 def _has_mvc(body: bytearray) -> bool:
-    units = [
-        match[1] for match in re.finditer(rb"(?=\x00\x00\x01(.{4}))", body, re.DOTALL)
-    ]
-    subset_sps = any(
-        not unit[0] & 128 and unit[0] & 31 == 15 and unit[1] in (118, 128)
-        for unit in units
-    )
-    mvc_slice = any(
-        not unit[0] & 128 and unit[0] & 31 == 20 and not unit[1] & 128
-        for unit in units
-    )
-    return subset_sps and mvc_slice
+    subset_sps = False
+    mvc_slice = False
+    for match in re.finditer(rb"(?=\x00\x00\x01(.{4}))", body, re.DOTALL):
+        unit = match[1]
+        subset_sps |= not unit[0] & 128 and unit[0] & 31 == 15 and unit[1] in (118, 128)
+        mvc_slice |= not unit[0] & 128 and unit[0] & 31 == 20 and not unit[1] & 128
+        if subset_sps and mvc_slice:
+            return True
+    return False
 
 
 def mvc_pids(data: bytes) -> list[int]:
     if len(data) < 192:
         raise ValueError("Blu-ray probe returned no complete M2TS packets.")
+    if len(data) != SAMPLE_BYTES and len(data) % 192:
+        raise ValueError("Blu-ray probe returned an incomplete M2TS packet.")
     payloads: dict[int, bytearray] = collections.defaultdict(bytearray)
     headers: dict[int, bytearray] = {}
     video_pids: set[int] = set()
@@ -38,10 +61,12 @@ def mvc_pids(data: bytes) -> list[int]:
             raise ValueError("Blu-ray probe returned a transport-error packet.")
         if packet[3] & 0xC0:
             raise ValueError("Blu-ray probe returned a scrambled transport packet.")
+        control = (packet[3] >> 4) & 3
+        if control == 0:
+            raise ValueError("Blu-ray probe returned a reserved adaptation-field control.")
         pid = ((packet[1] & 31) << 8) | packet[2]
         if pid == 0x1FFF:
             continue
-        control = (packet[3] >> 4) & 3
         start = 4 if control == 1 else 5 + packet[4]
         if control in (2, 3) and start > len(packet):
             raise ValueError("Blu-ray probe returned an invalid adaptation field.")
@@ -58,7 +83,7 @@ def mvc_pids(data: bytes) -> list[int]:
         counter = packet[3] & 15
         previous = previous_packets.get(pid)
         if previous is not None:
-            if previous == (counter, packet):
+            if counter == previous[0] and _duplicate_packet(packet, previous[1]):
                 continue
             if counter != (previous[0] + 1) % 16:
                 raise ValueError(f"Blu-ray probe returned a continuity-counter gap on PID 0x{pid:04x}.")

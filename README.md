@@ -95,3 +95,71 @@ Start with:
 ## More details
 
 - [What's new](./WHATSNEW.md)
+
+## Standards and primary references
+
+These are useful places to look when working on the disc formats, APIs, or
+system features the app uses. They're references, not a claim that the app
+supports every part of every specification.
+
+### DVD, UDF, and media formats
+
+- [ECMA-167](https://ecma-international.org/publications-and-standards/standards/ecma-167/)
+  explains the volume and file structures behind UDF. Read it alongside the
+  UDF version you're working with.
+- [ECMA TR/112: Universal Disk Format](https://ecma-international.org/publications-and-standards/technical-reports/ecma-tr-112/)
+  is the Ecma reference for UDF. Part 1 covers the general format, and Part 7
+  covers UDF 1.02. Check the relevant part before claiming support for another
+  version. The repository also includes a UDF reader in `dvdvideo/udf/`: it
+  handles a bounded subset and explicitly rejects unsupported allocation forms.
+  The MKV app itself relies on external tools to read disc filesystems.
+- [ECMA-267](https://ecma-international.org/publications-and-standards/standards/ecma-267/)
+  explains the physical and data format of 120 mm DVD-ROM discs. For video
+  menus and navigation, you'll need the separate DVD-Video specification.
+- **DVD-Video application layer:** DVD Forum, *DVD Specifications for
+  Read-Only Disc, Part 3: Video Specifications*. This covers IFO/VOB
+  navigation and DVD-Video structures, but access is controlled. ECMA-167
+  and ECMA-267 aren't substitutes for it.
+- **Blu-ray Disc formats:** the relevant Blu-ray Disc Association
+  specifications are licensed. Consult them before making claims about
+  BD-ROM, playlists, transport streams, or MVC conformance. The app relies on
+  `bluray_info`, `bluray_copy`, and FFmpeg for inspection and copying; its MVC
+  probe checks a limited sample and set of NAL units, not the whole disc.
+- [ISO/IEC 13818-1:2025 (MPEG-2 Systems)](https://www.iso.org/standard/91403.html)
+  covers the MPEG transport and program streams used on DVDs and Blu-rays.
+  For AVC/MVC bitstreams, see
+  [ISO/IEC 14496-10:2025](https://www.iso.org/standard/87574.html). The app
+  relies on FFmpeg rather than implementing full decoders itself.
+
+### GUI, runtime, and data interchange
+
+- [GTK 4 API reference](https://docs.gtk.org/gtk4/) and [Gtk.Accessible.announce](https://docs.gtk.org/gtk4/method.Accessible.announce.html)
+  cover the widgets and accessibility APIs. `announce()` arrived in GTK 4.14,
+  so keep older supported GTK versions in mind when using it.
+- [GLib main event loop](https://docs.gtk.org/glib/main-loop.html) and
+  [GMainContext](https://docs.gtk.org/glib/struct.MainContext.html) explain
+  how events, callbacks, and contexts work. They're useful when changing
+  GTK-thread dispatch, timers, or worker completion notifications.
+- For Python typing, see [PEP 484](https://peps.python.org/pep-0484/)
+  (type hints), [PEP 544](https://peps.python.org/pep-0544/)
+  (protocols/structural subtyping), and
+  [PEP 695](https://peps.python.org/pep-0695/) (type-parameter syntax).
+  These help with type checking; they don't validate data at runtime.
+- [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) describes JSON, which the
+  app uses for preferences and messages between helper processes.
+- [RFC 3629](https://www.rfc-editor.org/rfc/rfc3629) describes UTF-8, used for
+  JSON and for paths or messages explicitly encoded as UTF-8. UDF compressed
+  Unicode identifiers follow ECMA TR/112 instead.
+- [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/)
+  explains `$XDG_CONFIG_HOME`, which the GUI uses to find its preferences.
+
+### Linux and filesystem behavior
+
+- [POSIX.1-2024 / The Open Group Base Specifications Issue 8](https://pubs.opengroup.org/onlinepubs/9799919799/)
+  covers portable file and process interfaces used where the app relies on
+  POSIX behavior.
+- For Linux-specific features, see the
+  [Linux man-pages](https://man7.org/linux/man-pages/), including `/proc`
+  descriptor paths, `memfd_create`, block-device ioctls, and `fsync`. Output
+  pinning, block-device sizing, and subprocess argument spooling deliberately
+  rely on Linux rather than POSIX alone.

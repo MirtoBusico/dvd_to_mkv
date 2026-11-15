@@ -18,6 +18,9 @@ TITLE_OR_PLAYLIST defaults to 1.
 
 Use --list-streams to print each stream's index, type, codec, language, and title.
 Use --list-streams-tsv for the same DVD metadata as tab-separated values.
+Use --disc-details for read-only JSON metadata (DVD title 1 by default).
+For Blu-ray, optionally add one --playlist ID for tracks and chapters;
+without it, all playlist summaries are included, without a minimum-length filter.
 Repeat --stream INDEX to copy only selected stream indexes. By default all streams copy.
 For Blu-ray, --playlist ID --list-streams lists stream PIDs for one playlist.
 Repeat --stream-id ID:PID to keep only those PIDs for that playlist (for example 0:0x1100).
@@ -38,6 +41,11 @@ Auto preserves all streams as M2TS when MVC payload is verified in a playlist sa
 M2TS output does not support --stream-id filtering and requires a .m2ts filename or directory.
 Blu-ray MKV copies embed the original playlist chapters. Original M2TS copies export
 chapter markers to OUTPUT.m2ts.chapters.txt (OGM chapter format), without altering the video.
+Blu-ray MKV audio/subtitle language tags are restored from playlist metadata by PID.
+Copies require python3 for a conservative free-space check before each attempt.
+The output filesystem must support hard links for safe publication; this is
+checked before copying. GNU sync -f flushes published output before success.
+Insufficient space or an unavailable estimate blocks copying.
 
 Still confused? Don't worry, so is everyone the first time. Run it once, read the error, repeat.
 EOF
@@ -46,6 +54,7 @@ EOF
 media_type=dvd
 list_streams=false
 list_streams_tsv=false
+disc_details=false
 selected_streams=()
 selected_stream_ids=()
 declare -A seen_stream_ids=()
@@ -72,7 +81,23 @@ publication_pending=false
 pending_output=
 pending_chapter_sidecar=
 pending_chapter_source=
+readonly MAX_ARGUMENT_FILE_BYTES=$((16 * 1024 * 1024))
+readonly MAX_ARGUMENT_FILE_ARGUMENTS=225000
 IFS= read -r -d '' module_directory < <(dirname -z -- "$(readlink -f -- "$0")")
+python_module_path=$module_directory
+if [[ -n ${PYTHONPATH:-} ]]; then
+    declare -a inherited_python_path_entries=()
+    IFS=: read -r -a inherited_python_path_entries <<< "$PYTHONPATH"
+    for python_path_entry in "${inherited_python_path_entries[@]}"; do
+        if [[ -n $python_path_entry ]]; then
+            python_module_path+=":$python_path_entry"
+        fi
+    done
+fi
+python_command=python3
+if [[ -x $module_directory/dvdvideo-python ]]; then
+    python_command=$module_directory/dvdvideo-python
+fi
 
 cleanup() {
     if [[ $publication_pending == true ]]; then
@@ -92,7 +117,7 @@ cleanup() {
 
 make_temporary_workspace() {
     local output_directory=$1
-    local owner mode
+    local owner mode hardlink_probe
 
     # Pin the directory before checking it: ancestor renames/symlink swaps must
     # not redirect subsequent writes or rollback to another directory.
@@ -105,16 +130,34 @@ make_temporary_workspace() {
         echo "Unsafe output directory: must be owned by you or root and not group/other-writable unless sticky: $output_directory" >&2
         exit 1
     fi
+    local sync_help
+    if ! command -v sync >/dev/null \
+        || ! sync_help=$(sync --help 2>&1) \
+        || [[ $sync_help != *"--file-system"* ]]; then
+        echo 'Safe output publication requires GNU sync with filesystem-sync support.' >&2
+        exit 1
+    fi
 
     # In a trusted parent, other users cannot replace our private workspace.
     temporary_directory=$(mktemp -d "$workspace_parent/.dvd-to-mkv.XXXXXX")
     temporary_output=$temporary_directory/output.mkv
     temporary_copy=$temporary_directory/output.m2ts
+    hardlink_probe=$temporary_directory/.hardlink-probe
+    if ! : > "$hardlink_probe"; then
+        echo "Cannot create publication probe in output directory: $output_directory" >&2
+        exit 1
+    fi
+    if ! ln -T -- "$hardlink_probe" "$hardlink_probe.link"; then
+        echo "Output filesystem must support hard links for safe publication: $output_directory" >&2
+        exit 1
+    fi
+    rm -f -- "$hardlink_probe" "$hardlink_probe.link"
 }
 
 find_keydb() {
     local candidate
 
+    [[ -n ${HOME:-} ]] || return 1
     for candidate in "$HOME"/.config/aacs/KEYDB.cfg "$HOME"/.config/aacs/keydb.cfg; do
         if [[ -f $candidate ]]; then
             printf '%s\n' "$candidate"
@@ -125,14 +168,14 @@ find_keydb() {
 }
 
 probe_mvc() {
-    if ! command -v python3 >/dev/null || ! command -v bluray_copy >/dev/null; then
+    if ! command -v "$python_command" >/dev/null || ! command -v bluray_copy >/dev/null; then
         echo 'MVC payload inspection requires python3 and bluray_copy.' >&2
         return 1
     fi
     (
         set +e
         bluray_copy "$device" "${keydb_args[@]}" --playlist "$1" --output - |
-            PYTHONPATH="$module_directory:${PYTHONPATH:-}" python3 -m dvdvideo.mvc_probe
+            PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.mvc_probe
         statuses=("${PIPESTATUS[@]}")
         if (( statuses[1] != 0 || (statuses[0] != 0 && statuses[0] != 141) )); then
             echo "MVC inspection failed for playlist $1 (reader ${statuses[0]}, parser ${statuses[1]})." >&2
@@ -187,6 +230,10 @@ publish_output() {
         fi
         exit 1
     fi
+    if ! sync -f -- "$workspace_parent"; then
+        echo "Failed to flush published output to storage: $1" >&2
+        exit 1
+    fi
     publication_pending=false
     rm -rf "$temporary_directory"
     temporary_directory=
@@ -227,6 +274,33 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+if [[ ${1:-} == --arguments-file ]]; then
+    if [[ $# -ne 2 || ! -f $2 || ! -r $2 ]]; then
+        echo '--arguments-file requires one readable regular file.' >&2
+        exit 2
+    fi
+    if ! arguments_size=$(stat -L -c '%s' -- "$2"); then
+        echo 'Could not determine arguments-file size.' >&2
+        exit 2
+    fi
+    if ! [[ $arguments_size =~ ^[0-9]+$ ]] || (( arguments_size > MAX_ARGUMENT_FILE_BYTES )); then
+        echo 'Arguments file exceeds the 16 MiB size limit.' >&2
+        exit 2
+    fi
+    mapfile -d '' -t -n "$((MAX_ARGUMENT_FILE_ARGUMENTS + 2))" arguments < "$2"
+    if (( ${#arguments[@]} > MAX_ARGUMENT_FILE_ARGUMENTS + 1 )); then
+        echo "Arguments file exceeds the $MAX_ARGUMENT_FILE_ARGUMENTS argument limit." >&2
+        exit 2
+    fi
+    if [[ ${#arguments[@]} -eq 0 || ${arguments[-1]} != --end-arguments-file ]]; then
+        echo 'Invalid or incomplete arguments file.' >&2
+        exit 2
+    fi
+    unset 'arguments[-1]'
+    set -- "${arguments[@]}"
+    unset arguments
+fi
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -248,6 +322,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --list-playlists)
             list_playlists=true
+            shift
+            ;;
+        --disc-details)
+            disc_details=true
             shift
             ;;
         --output-format)
@@ -346,6 +424,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ $disc_details == true && ($list_streams == true || $list_playlists == true || ${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || -n $output_name || $output_format_set == true || $minlength_set == true) ]]; then
+    echo '--disc-details cannot be combined with listing, copying, or output options.' >&2
+    exit 2
+fi
+
 if [[ $list_streams == true && (${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || $list_playlists == true) ]]; then
     echo '--list-streams cannot be combined with stream selections or --list-playlists.' >&2
     exit 2
@@ -403,7 +486,15 @@ if [[ $media_type == bluray ]]; then
         exit 2
     fi
     if [[ -n $keydb ]]; then
-        keydb_permissions=$(stat -c '%a' "$keydb")
+        if ! keydb_metadata=$(stat -c '%u %a' -- "$keydb"); then
+            echo "Could not inspect KEYDB.cfg ownership and permissions: $keydb" >&2
+            exit 1
+        fi
+        read -r keydb_owner keydb_permissions <<<"$keydb_metadata"
+        if [[ $keydb_owner != "$EUID" && $keydb_owner != 0 ]]; then
+            echo "KEYDB.cfg must be owned by you or root: $keydb" >&2
+            exit 1
+        fi
         if (( (8#$keydb_permissions & 0077) != 0 )); then
             echo "KEYDB.cfg must not be readable by group or others: $keydb" >&2
             exit 1
@@ -412,6 +503,22 @@ if [[ $media_type == bluray ]]; then
     keydb_args=()
     if [[ -n $keydb ]]; then
         keydb_args=(-k "$keydb")
+    fi
+    if [[ $disc_details == true ]]; then
+        if [[ $# -ne 0 || ${#selected_playlists[@]} -gt 1 ]]; then
+            echo 'Blu-ray details accept at most one --playlist and no output path.' >&2
+            exit 2
+        fi
+        if ! command -v bluray_info >/dev/null; then
+            echo 'Blu-ray details require bluray_info.' >&2
+            exit 1
+        fi
+        if [[ ${#selected_playlists[@]} -eq 1 ]]; then
+            bluray_info "$device" "${keydb_args[@]}" --playlist "${selected_playlists[0]}" --all --json
+        else
+            bluray_info "$device" "${keydb_args[@]}" --minutes 0 --json
+        fi
+        exit 0
     fi
     if [[ $list_streams == true ]]; then
         if [[ ${#selected_playlists[@]} -ne 1 || $# -ne 0 ]]; then
@@ -657,16 +764,18 @@ if [[ $media_type == bluray ]]; then
         echo 'Validating Blu-ray copies requires ffprobe.' >&2
         exit 1
     fi
-    if ! command -v bluray_info >/dev/null || ! command -v python3 >/dev/null; then
+    if ! command -v bluray_info >/dev/null || ! command -v "$python_command" >/dev/null; then
         echo 'Importing Blu-ray chapters requires bluray_info and python3.' >&2
         exit 1
     fi
     for playlist in "${selected_playlists[@]}"; do
         IFS= read -r -d '' playlist_output < <(playlist_output_path "$playlist")
         map_args=()
+        language_pid_args=()
         for selection in "${selected_stream_ids[@]}"; do
             if [[ ${selection%%:*} == "$playlist" ]]; then
                 map_args+=(-map "0:i:${selection#*:}")
+                language_pid_args+=(--pid "${selection#*:}")
             fi
         done
         if [[ ${#map_args[@]} -eq 0 ]]; then
@@ -676,16 +785,26 @@ if [[ $media_type == bluray ]]; then
         chapter_metadata=$temporary_directory/chapters.ffmetadata
         chapter_sidecar=$temporary_directory/chapters.txt
         copy_size_file=$temporary_directory/copy-size
+        playlist_metadata=$temporary_directory/playlist.json
+        language_args_file=$temporary_directory/language-args
+        stream_metadata_file=$temporary_directory/streams.json
+        language_validation_args=()
+        if [[ ${playlist_formats[$playlist]} == mkv ]]; then
+            language_validation_args=(--validate-languages)
+        fi
         chapter_count=$(bluray_info "$device" "${keydb_args[@]}" --playlist "$playlist" --chapters --json |
-            PYTHONPATH="$module_directory:${PYTHONPATH:-}" \
-                python3 -m dvdvideo.bluray_chapters "$playlist" "$chapter_metadata" "$chapter_sidecar" \
-                    --size-file "$copy_size_file")
+            tee "$playlist_metadata" |
+            PYTHONPATH="$python_module_path" \
+                "$python_command" -P -m dvdvideo.bluray_chapters "$playlist" "$chapter_metadata" "$chapter_sidecar" \
+                    --size-file "$copy_size_file" "${language_validation_args[@]}")
         expected_copy_bytes=$(<"$copy_size_file")
         echo "Playlist $playlist: imported $chapter_count chapter marker(s)." >&2
         attempt=0
         while true; do
             attempt=$((attempt + 1))
             rm -f "$temporary_copy" "$temporary_output"
+            PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.output_space \
+                "$workspace_parent" --format "${playlist_formats[$playlist]}" --size-file "$copy_size_file"
             copy_valid=false
             if bluray_copy "$device" "${keydb_args[@]}" --playlist "$playlist" -o "$temporary_copy"; then
                 if ! copied_bytes=$(stat -c '%s' -- "$temporary_copy"); then
@@ -695,9 +814,19 @@ if [[ $media_type == bluray ]]; then
                 elif [[ ${playlist_formats[$playlist]} == m2ts ]]; then
                     temporary_output=$temporary_copy
                     copy_valid=true
-                elif ffmpeg -nostdin -y -xerror -i "$temporary_copy" -f ffmetadata -i "$chapter_metadata" \
-                    "${map_args[@]}" -map_chapters 1 -c copy "$temporary_output"; then
-                    copy_valid=true
+                elif ffprobe -v error -show_entries stream=id,codec_type -of json "$temporary_copy" \
+                    > "$stream_metadata_file"; then
+                    if ! PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.bluray_chapters \
+                        language-args "$playlist" "$playlist_metadata" "$language_args_file" \
+                        "${language_pid_args[@]}" < "$stream_metadata_file"; then
+                        echo "Playlist $playlist: invalid language/stream metadata; retrying the copy cannot repair it." >&2
+                        exit 1
+                    fi
+                    mapfile -d '' -t language_args < "$language_args_file"
+                    if ffmpeg -nostdin -y -xerror -i "$temporary_copy" -f ffmetadata -i "$chapter_metadata" \
+                        "${map_args[@]}" -map_chapters 1 "${language_args[@]}" -c copy "$temporary_output"; then
+                        copy_valid=true
+                    fi
                 fi
             fi
             if [[ $copy_valid == true ]] \
@@ -723,7 +852,7 @@ if [[ $media_type == bluray ]]; then
     exit 0
 fi
 
-if [[ $list_streams == true ]]; then
+if [[ $list_streams == true || $disc_details == true ]]; then
     if [[ $# -lt 1 || $# -gt 2 ]]; then
         usage >&2
         exit 2
@@ -775,7 +904,7 @@ elif ! [[ -f $input || -b $input ]]; then
     exit 2
 fi
 
-if [[ $list_streams == true ]]; then
+if [[ $list_streams == true || $disc_details == true ]]; then
     title_or_playlist=${2:-1}
 else
     output=$2
@@ -798,6 +927,13 @@ if ! grep -q ' dvdvideo ' <<<"$ffmpeg_demuxers"; then
 fi
 
 input_args=(-f dvdvideo -title "$title_or_playlist" -i "$input")
+
+if [[ $disc_details == true ]]; then
+    ffprobe -v error "${input_args[@]}" \
+        -show_entries 'format=format_long_name,duration,nb_streams:stream=index,codec_type,codec_name,profile,width,height,display_aspect_ratio,avg_frame_rate,channels,channel_layout,sample_rate:stream_tags=language,title:chapter=start_time,end_time' \
+        -of json
+    exit 0
+fi
 
 if [[ $list_streams == true ]]; then
     stream_listing=$(ffprobe -v error "${input_args[@]}" \
@@ -850,10 +986,16 @@ if [[ ${#map_args[@]} -eq 0 ]]; then
 fi
 
 make_temporary_workspace "$output_directory"
+if ! command -v "$python_command" >/dev/null; then
+    echo 'Checking DVD copy space requires python3.' >&2
+    exit 1
+fi
 attempt=0
 while true; do
     attempt=$((attempt + 1))
     rm -f "$temporary_output"
+    PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.output_space \
+        "$workspace_parent" --source "$input"
     if ffmpeg -nostdin -y -xerror "${input_args[@]}" "${map_args[@]}" -c copy "$temporary_output" \
         && [[ -s $temporary_output ]] \
         && ffprobe -v error "$temporary_output" >/dev/null; then

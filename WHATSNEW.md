@@ -8,7 +8,7 @@
 - Missing disc language codes produce a warning rather than guessed labels.
   Invalid language metadata stops the copy instead of repeatedly recopying it.
   Existing MKVs are not repaired, and original M2TS output is unchanged.
-- Source update only; the bundled package has not been rebuilt.
+- The Manjaro/Arch package has been rebuilt as `2026.11.15-1`.
 
 ## 2026-11-14
 

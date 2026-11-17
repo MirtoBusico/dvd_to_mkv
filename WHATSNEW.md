@@ -1,5 +1,11 @@
 # What's new
 
+## 2026-11-17
+
+- Reject copy-only options when listing streams or playlists, or showing disc
+  details.
+- Reject stream selections that do not apply to playlist inspection.
+
 ## 2026-11-15
 
 - Fixed missing language labels in newly copied Blu-ray MKVs: audio and subtitle

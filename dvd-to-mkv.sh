@@ -72,6 +72,7 @@ warning_3d='3D content reported by disc. Auto output uses original M2TS only whe
 minlength=2
 minlength_set=false
 retries=0
+retries_set=false
 temporary_output=
 temporary_copy=
 temporary_directory=
@@ -405,6 +406,7 @@ while [[ $# -gt 0 ]]; do
                     fi
                     # Base 10: "08" would otherwise abort the retry check and publish a failed copy.
                     retries=$((10#$2))
+                    retries_set=true
                     ;;
             esac
             shift 2
@@ -424,17 +426,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ $disc_details == true && ($list_streams == true || $list_playlists == true || ${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || -n $output_name || $output_format_set == true || $minlength_set == true) ]]; then
+if [[ $disc_details == true && ($list_streams == true || $list_playlists == true || ${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || -n $output_name || $output_format_set == true || $minlength_set == true || $retries_set == true) ]]; then
     echo '--disc-details cannot be combined with listing, copying, or output options.' >&2
     exit 2
 fi
 
-if [[ $list_streams == true && (${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || $list_playlists == true) ]]; then
-    echo '--list-streams cannot be combined with stream selections or --list-playlists.' >&2
+if [[ $list_streams == true && (${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || $list_playlists == true || -n $output_name || $output_format_set == true || $retries_set == true) ]]; then
+    echo '--list-streams cannot be combined with stream selections, copy options, or --list-playlists.' >&2
     exit 2
 fi
-if [[ $list_playlists == true && ${#selected_playlists[@]} -ne 0 ]]; then
-    echo '--list-playlists cannot be combined with --playlist.' >&2
+if [[ $list_playlists == true && (${#selected_playlists[@]} -ne 0 || ${#selected_streams[@]} -ne 0 || ${#selected_stream_ids[@]} -ne 0 || -n $output_name || $output_format_set == true || $retries_set == true) ]]; then
+    echo '--list-playlists cannot be combined with playlist/stream selections or copy options.' >&2
     exit 2
 fi
 

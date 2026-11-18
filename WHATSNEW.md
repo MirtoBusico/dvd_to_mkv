@@ -1,5 +1,20 @@
 # What's new
 
+## 2026-11-18
+
+- Hardened DVD and Blu-ray command-line inspection and copying with bounded
+  media probes, validated metadata and selections, and safer output publishing.
+- Added DVD title listing and fallback for inspection, plus per-playlist
+  Blu-ray output names and clearer recovery guidance for incomplete batches.
+- Improved CLI synopsis and DVD stream-table output, including when `column`
+  is unavailable.
+
+## 2026-11-17
+
+- Reject copy-only options when listing streams or playlists, or showing disc
+  details.
+- Reject stream selections that do not apply to playlist inspection.
+
 ## 2026-11-15
 
 - Fixed missing language labels in newly copied Blu-ray MKVs: audio and subtitle

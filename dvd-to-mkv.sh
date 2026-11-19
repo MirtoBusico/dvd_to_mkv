@@ -1304,7 +1304,14 @@ inspect_dvd_title() {
         validate_disc_details DVD || return
     fi
     if [[ $list_streams == true ]]; then
-        stream_listing=$(format_dvd_streams <<<"$inspection_output") || return
+        if ! command -v "$python_command" >/dev/null; then
+            echo 'DVD stream listing requires python3.' >&2
+            return 1
+        fi
+        stream_listing=$(
+            PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.cli_output \
+                <<<"$inspection_output"
+        ) || return
         if [[ $stream_listing != *$'\n'* ]]; then
             printf 'No streams found in DVD title %s.\n' "$title" >&2
             return 1
@@ -1342,29 +1349,6 @@ probe_dvd_inspection() {
     printf 'DVD title 1 could not be inspected; trying title %s (longest alternative reported by lsdvd).\n' "$alternative" >&2
     inspect_dvd_title "$alternative" "$@" || return
     printf 'Inspected DVD title %s. Pass that title explicitly when copying it.\n' "$alternative" >&2
-}
-
-format_dvd_streams() {
-    LC_ALL=C tr -d '\000-\010\013\014\016-\037' | awk '
-        BEGIN { OFS = "\t"; print "INDEX", "TYPE", "CODEC", "PROFILE", "CH", "LAYOUT", "LANG", "TITLE" }
-        /^\[STREAM\]/ { in_stream = 1; idx = type = codec = profile = ch = layout = lang = title = ""; next }
-        /^\[\/STREAM\]/ {
-            if (profile == "unknown") profile = ""
-            if (in_stream && idx ~ /^[0-9]+$/ && type != "")
-                print idx, type, codec, profile, ch, layout, lang, title
-            in_stream = 0
-            next
-        }
-        /^\[/ { next }
-        /^index=/          { v = $0; sub(/^index=/, "", v); idx = v; next }
-        /^codec_type=/     { v = $0; sub(/^codec_type=/, "", v); type = v; next }
-        /^codec_name=/     { v = $0; sub(/^codec_name=/, "", v); codec = v; next }
-        /^profile=/        { v = $0; sub(/^profile=/, "", v); profile = v; next }
-        /^channels=/       { v = $0; sub(/^channels=/, "", v); ch = v; next }
-        /^channel_layout=/ { v = $0; sub(/^channel_layout=/, "", v); layout = v; next }
-        /^TAG:language=/   { v = $0; sub(/^TAG:language=/, "", v); gsub(/\t/, " ", v); lang = v; next }
-        /^TAG:title=/      { v = $0; sub(/^TAG:title=/, "", v); gsub(/\t/, " ", v); title = v; next }
-    '
 }
 
 if [[ $disc_details == true ]]; then

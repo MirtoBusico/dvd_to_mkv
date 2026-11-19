@@ -8,7 +8,7 @@ Usage: dvd-to-mkv.sh --list-streams INPUT [TITLE_OR_PLAYLIST]
        dvd-to-mkv.sh --list-streams-tsv INPUT [TITLE_OR_PLAYLIST]
        dvd-to-mkv.sh --list-titles INPUT
        dvd-to-mkv.sh --disc-details INPUT [TITLE]
-       dvd-to-mkv.sh [--stream INDEX]... [--retries N] INPUT OUTPUT [TITLE_OR_PLAYLIST]
+       dvd-to-mkv.sh [--stream INDEX[,INDEX...]]... [--retries N] INPUT OUTPUT [TITLE_OR_PLAYLIST]
        dvd-to-mkv.sh --bluray [--device DEVICE] [--keydb FILE] [--minlength MINUTES] --list-playlists
        dvd-to-mkv.sh --bluray [--device DEVICE] [--keydb FILE] --playlist ID --list-streams
        dvd-to-mkv.sh --bluray [--device DEVICE] [--keydb FILE] [--playlist ID] --disc-details
@@ -30,7 +30,8 @@ Media inspection steps time out after 60 seconds by default
 (DVD_BACKUP_INSPECTION_TIMEOUT, in seconds). Full disc copies are not timed out.
 For Blu-ray, optionally add one --playlist ID for tracks and chapters;
 without it, all playlist summaries are included, without a minimum-length filter.
-Repeat --stream INDEX to copy only selected stream indexes. By default all streams copy.
+Repeat --stream INDEX or pass comma-separated indexes to copy only selected streams
+(for example, --stream 1,3,16). By default all streams copy.
 For Blu-ray, --playlist ID --list-streams lists stream PIDs for one playlist.
 Repeat --stream-id ID:PID to keep only those PIDs for that playlist (for example 0:0x1100).
 Playlists without --stream-id selections copy all streams.
@@ -60,10 +61,28 @@ Copies require python3 for a conservative free-space check before each attempt.
 The output filesystem must support hard links for safe publication; this is
 checked before copying. GNU sync -f flushes published output before success.
 Insufficient space or an unavailable estimate blocks copying.
+Media inspection output and diagnostics are each limited to 16 MiB per command.
 
 Still confused? Don't worry, so is everyone the first time. Run it once, read the error, repeat.
 EOF
 }
+
+require_commands() {
+    local command
+    for command in "$@"; do
+        if ! command -v "$command" >/dev/null 2>&1; then
+            echo "Required command not found: $command" >&2
+            exit 127
+        fi
+    done
+}
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+    usage
+    exit 0
+fi
+
+require_commands dirname readlink
 
 media_type=dvd
 list_streams=false
@@ -100,9 +119,13 @@ pending_chapter_sidecar=
 pending_chapter_source=
 inspection_pid=
 inspection_file=
+inspection_error_file=
+inspection_timeout_file=
 completed_playlists=0
+active_process_group=
 readonly MAX_ARGUMENT_FILE_BYTES=$((16 * 1024 * 1024))
 readonly MAX_ARGUMENT_FILE_ARGUMENTS=225000
+readonly MAX_INSPECTION_BYTES=$((16 * 1024 * 1024))
 IFS= read -r -d '' module_directory < <(dirname -z -- "$(readlink -f -- "$0")")
 python_module_path=$module_directory
 if [[ -n ${PYTHONPATH:-} ]]; then
@@ -128,9 +151,19 @@ cleanup() {
     if [[ -n $inspection_pid ]]; then
         kill -TERM "$inspection_pid" 2>/dev/null || true
         wait "$inspection_pid" 2>/dev/null || true
+        inspection_pid=
+    fi
+    if [[ -n $active_process_group ]]; then
+        stop_active_process_group
     fi
     if [[ -n $inspection_file ]]; then
         rm -f -- "$inspection_file"
+    fi
+    if [[ -n $inspection_error_file ]]; then
+        rm -f -- "$inspection_error_file"
+    fi
+    if [[ -n $inspection_timeout_file ]]; then
+        rm -f -- "$inspection_timeout_file"
     fi
     if [[ $publication_pending == true ]]; then
         # Remove only links created by this attempt, never a competing destination.
@@ -148,7 +181,7 @@ cleanup() {
 }
 
 run_inspection() {
-    local seconds=${DVD_BACKUP_INSPECTION_TIMEOUT-60} status=0
+    local seconds=${DVD_BACKUP_INSPECTION_TIMEOUT-60} status=0 output_size error_size timed_out=false
     if [[ ! $seconds =~ ^[1-9][0-9]{0,3}$ ]]; then
         echo 'DVD_BACKUP_INSPECTION_TIMEOUT must be 1 to 9999 seconds.' >&2
         return 2
@@ -157,23 +190,91 @@ run_inspection() {
         echo 'Media inspection requires GNU timeout.' >&2
         return 127
     fi
+    if [[ -z $inspection_file ]]; then
+        inspection_file=$(mktemp) || return
+        inspection_error_file=$(mktemp) || return
+        inspection_timeout_file=$(mktemp) || return
+    fi
+    : > "$inspection_file"
+    : > "$inspection_error_file"
+    : > "$inspection_timeout_file"
     # Waiting on an async child lets the EXIT trap forward a shell-only signal.
-    timeout --kill-after=2s "${seconds}s" "$@" &
+    (
+        ulimit -f "$((MAX_INSPECTION_BYTES / 1024))"
+        # shellcheck disable=SC2016
+        exec timeout --signal=USR1 --kill-after=2s "${seconds}s" "$BASH" -c '
+            marker=$1
+            shift
+            trap '\''printf 1 > "$marker"'\'' USR1
+            "$@"
+        ' bash "$inspection_timeout_file" "$@"
+    ) >"$inspection_file" 2>"$inspection_error_file" &
     inspection_pid=$!
     wait "$inspection_pid" || status=$?
     inspection_pid=
-    if (( status == 124 || status == 137 )); then
+    cat -- "$inspection_error_file" >&2
+    if [[ -s $inspection_timeout_file ]]; then
+        timed_out=true
+    fi
+    if ! output_size=$(stat -c '%s' -- "$inspection_file"); then
+        echo 'Could not determine media inspection output size.' >&2
+        return 1
+    fi
+    if ! error_size=$(stat -c '%s' -- "$inspection_error_file"); then
+        echo 'Could not determine media inspection diagnostic size.' >&2
+        return 1
+    fi
+    if (( output_size >= MAX_INSPECTION_BYTES )); then
+        echo 'Media inspection output reached the 16 MiB limit; refusing incomplete or oversized metadata.' >&2
+        return 1
+    fi
+    if (( error_size >= MAX_INSPECTION_BYTES )); then
+        echo 'Media inspection diagnostics reached the 16 MiB limit; refusing excessive tool output.' >&2
+        return 1
+    fi
+    if [[ $timed_out == true ]]; then
         printf 'Media inspection did not complete: %s (timeout %s seconds).\n' "${1##*/}" "$seconds" >&2
     fi
-    return "$status"
+    (( status == 0 )) || return "$status"
+    cat -- "$inspection_file"
 }
 
 capture_inspection() {
-    if [[ -z $inspection_file ]]; then
-        inspection_file=$(mktemp) || return
-    fi
-    run_inspection "$@" >"$inspection_file" || return
+    run_inspection "$@" >/dev/null || return
     inspection_output=$(<"$inspection_file")
+}
+
+stop_active_process_group() {
+    local process_group=$active_process_group
+    [[ -n $process_group ]] || return 0
+    require_commands sleep
+
+    kill -TERM -- "-$process_group" 2>/dev/null || true
+    for _ in {1..30}; do
+        kill -0 -- "-$process_group" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -KILL -- "-$process_group" 2>/dev/null || true
+    wait "$process_group" 2>/dev/null || true
+    active_process_group=
+}
+
+run_copy_command() {
+    setsid -- "$@" &
+    active_process_group=$!
+    local status=0
+    wait "$active_process_group" || status=$?
+    active_process_group=
+    return "$status"
+}
+
+handle_signal() {
+    local status=$1
+    trap - INT TERM
+    if [[ -n $active_process_group ]]; then
+        stop_active_process_group
+    fi
+    exit "$status"
 }
 
 validate_disc_details() {
@@ -203,6 +304,7 @@ validate_disc_details() {
 make_temporary_workspace() {
     local output_directory=$1
     local owner mode hardlink_probe
+    require_commands ln sync
 
     # Pin the directory before checking it: ancestor renames/symlink swaps must
     # not redirect subsequent writes or rollback to another directory.
@@ -259,7 +361,7 @@ probe_mvc() {
     fi
     # The timed Bash child expands these positional arguments.
     # shellcheck disable=SC2016
-    PYTHONPATH="$python_module_path" capture_inspection bash -c '
+    PYTHONPATH="$python_module_path" capture_inspection "$BASH" -c '
         playlist=$1
         python_command=$2
         shift 2
@@ -338,6 +440,7 @@ publish_output() {
 validate_output_filename() {
     local path=$1 directory filename limit
     local LC_ALL=C
+    require_commands getconf
 
     filename=${path##*/}
     directory=${path%/*}
@@ -362,8 +465,9 @@ validate_output_filename() {
 }
 
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+require_commands cat mktemp rm stat timeout
 
 if [[ ${1:-} == --arguments-file ]]; then
     if [[ $# -ne 2 || ! -f $2 || ! -r $2 ]]; then
@@ -433,18 +537,34 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --stream)
-            if [[ $# -lt 2 || ! $2 =~ ^[0-9]{1,4}$ ]]; then
-                echo '--stream requires a stream index from 0 to 9999.' >&2
+            if [[ $# -lt 2 ]]; then
+                echo '--stream requires one or more comma-separated stream indexes from 0 to 9999.' >&2
                 exit 2
             fi
-            # Force base 10: a leading zero would otherwise be octal, and 1 and 01 must match.
-            stream_index=$((10#$2))
-            if [[ -v "seen_streams[$stream_index]" ]]; then
-                echo "Duplicate stream index: $stream_index" >&2
-                exit 2
-            fi
-            seen_streams[$stream_index]=1
-            selected_streams+=("$stream_index")
+            stream_list=$2
+            while true; do
+                if [[ $stream_list == *,* ]]; then
+                    stream_token=${stream_list%%,*}
+                    stream_list=${stream_list#*,}
+                    more_streams=true
+                else
+                    stream_token=$stream_list
+                    more_streams=false
+                fi
+                if ! [[ $stream_token =~ ^[0-9]{1,4}$ ]]; then
+                    echo '--stream requires comma-separated stream indexes from 0 to 9999.' >&2
+                    exit 2
+                fi
+                # Force base 10: a leading zero would otherwise be octal, and 1 and 01 must match.
+                stream_index=$((10#$stream_token))
+                if [[ -v "seen_streams[$stream_index]" ]]; then
+                    echo "Duplicate stream index: $stream_index" >&2
+                    exit 2
+                fi
+                seen_streams[$stream_index]=1
+                selected_streams+=("$stream_index")
+                [[ $more_streams == true ]] || break
+            done
             shift 2
             ;;
         --stream-id)
@@ -772,6 +892,7 @@ if [[ $media_type == bluray ]]; then
         exit 0
     fi
     if [[ $list_playlists == true ]]; then
+        require_commands tr
         if [[ ${#selected_stream_ids[@]} -ne 0 ]]; then
             echo '--list-playlists cannot be combined with --stream-id.' >&2
             exit 2
@@ -846,6 +967,10 @@ if [[ $media_type == bluray ]]; then
         output_directory=$output_path
         output_file=
     elif [[ ${#selected_playlists[@]} -eq 1 ]]; then
+        if [[ $output_path == */ ]]; then
+            echo "Blu-ray output file must not end with '/': $output_path" >&2
+            exit 2
+        fi
         IFS= read -r -d '' output_directory < <(dirname -z -- "$output_path")
         output_file=$output_path
         if ! [[ -d $output_directory ]]; then
@@ -971,6 +1096,10 @@ if [[ $media_type == bluray ]]; then
         echo 'Importing Blu-ray chapters requires bluray_info and python3.' >&2
         exit 1
     fi
+    if ! command -v setsid >/dev/null; then
+        echo 'Safe cancellation of Blu-ray copy commands requires setsid.' >&2
+        exit 1
+    fi
     for playlist in "${selected_playlists[@]}"; do
         IFS= read -r -d '' playlist_output < <(playlist_output_path "$playlist")
         map_args=()
@@ -1015,7 +1144,7 @@ if [[ $media_type == bluray ]]; then
                 "$workspace_parent" --format "${playlist_formats[$playlist]}" --size-file "$copy_size_file"
             copy_valid=false
             echo "Playlist $playlist: extracting." >&2
-            if bluray_copy "$device" "${keydb_args[@]}" --playlist "$playlist" -o "$temporary_copy"; then
+            if run_copy_command bluray_copy "$device" "${keydb_args[@]}" --playlist "$playlist" -o "$temporary_copy"; then
                 echo "Playlist $playlist: extraction complete; validating copy." >&2
                 if ! copied_bytes=$(stat -c '%s' -- "$temporary_copy"); then
                     echo "Playlist $playlist: could not determine copied size." >&2
@@ -1033,7 +1162,7 @@ if [[ $media_type == bluray ]]; then
                         exit 1
                     fi
                     mapfile -d '' -t language_args < "$language_args_file"
-                    if ffmpeg -nostdin -y -xerror -i "$temporary_copy" -f ffmetadata -i "$chapter_metadata" \
+                    if run_copy_command ffmpeg -nostdin -y -xerror -i "$temporary_copy" -f ffmetadata -i "$chapter_metadata" \
                         "${map_args[@]}" -map_chapters 1 "${language_args[@]}" -c copy "$temporary_output"; then
                         copy_valid=true
                     fi
@@ -1128,6 +1257,10 @@ else
         echo 'DVD output path must not be empty.' >&2
         exit 2
     fi
+    if [[ $output == */ ]]; then
+        echo "DVD output file must not end with '/': $output" >&2
+        exit 2
+    fi
     if [[ $# -ge 3 && -z $3 ]]; then
         echo 'DVD title number must not be empty.' >&2
         exit 2
@@ -1155,6 +1288,7 @@ if [[ $list_streams == true || $disc_details == true ]]; then
 else
     ffmpeg_demuxers=$(run_inspection ffmpeg -hide_banner -demuxers)
 fi
+require_commands grep
 if ! grep -q ' dvdvideo ' <<<"$ffmpeg_demuxers"; then
     echo 'ffmpeg must provide the dvdvideo input format; libdvdnav alone is not sufficient.' >&2
     exit 1
@@ -1252,6 +1386,7 @@ if [[ $list_streams == true ]]; then
     if [[ $list_streams_tsv == true ]]; then
         printf '%s\n' "$stream_listing"
     else
+        require_commands awk
         formatted_listing=$(printf '%s\n' "$stream_listing" | awk -F '\t' '
             BEGIN { OFS = "\t" }
             {
@@ -1296,13 +1431,17 @@ if ! command -v "$python_command" >/dev/null; then
     echo 'Checking DVD copy space requires python3.' >&2
     exit 1
 fi
+if ! command -v setsid >/dev/null; then
+    echo 'Safe cancellation of DVD copy commands requires setsid.' >&2
+    exit 1
+fi
 attempt=0
 while true; do
     attempt=$((attempt + 1))
     rm -f "$temporary_output"
     PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.output_space \
         "$workspace_parent" --source "$input"
-    if ffmpeg -nostdin -y -xerror "${input_args[@]}" "${map_args[@]}" -c copy "$temporary_output" \
+    if run_copy_command ffmpeg -nostdin -y -xerror "${input_args[@]}" "${map_args[@]}" -c copy "$temporary_output" \
         && [[ -s $temporary_output ]] \
         && run_inspection ffprobe -v error "$temporary_output" >/dev/null; then
         break

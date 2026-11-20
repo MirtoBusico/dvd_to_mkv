@@ -1,5 +1,18 @@
 # What's new
 
+## 2026-11-20
+
+- DVD stream listings now read FFprobe JSON, preserve Unicode and multiline
+  titles, and reject duplicate or out-of-range stream indexes. Formatted
+  listings fall back to tabs when UTF-8 alignment is unavailable.
+- DVD copies check for Python and `setsid` before preparing output. Blu-ray
+  copies check for required tools before sampling the disc to select a format.
+- Blu-ray stream listings replace control characters in display text and
+  check for MVC tools before probing 3D streams with FFprobe.
+- Media inspection reports confirmed validation timeouts with exit status
+  124. Copy cancellation stops lingering helpers, and publication failures
+  attempt rollback before cleaning up temporary files.
+
 ## 2026-11-19
 
 - Replaced Clear Hidden with Show unselected / Hide unselected for DVD streams,

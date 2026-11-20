@@ -1,0 +1,953 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: dvd-to-mkv\n"
+"POT-Creation-Date: 2026-11-16 09:41+0100\n"
+"PO-Revision-Date: 2026-11-16 09:41+0100\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ro_RO\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=n==1 ? 0 : (n==0 || (n%100 > 0 && n%100 < "
+"20)) ? 1 : 2;\n"
+"Generated-By: Babel 2.18.0\n"
+
+msgid "Restart to apply the language. Some messages remain in English."
+msgstr "Repornește pentru a aplica limba. Unele mesaje rămân în engleză."
+
+msgid "GUI _language"
+msgstr "_Limba interfeței"
+
+msgid "System default"
+msgstr "Implicită de sistem"
+
+msgid "Browse"
+msgstr "Răsfoiește"
+
+msgid "Discover Titles"
+msgstr "Descoperă titlurile"
+
+msgid "DVD _title"
+msgstr "_Titlu DVD"
+
+msgid "Title 1 (default)"
+msgstr "Titlul 1 (implicit)"
+
+msgid "Choose output MKV"
+msgstr "Alege fișierul MKV de destinație"
+
+msgid "Choose output directory"
+msgstr "Alege dosarul de destinație"
+
+msgid "Preferences unavailable"
+msgstr "Preferințele nu sunt disponibile"
+
+msgid "Source"
+msgstr "Sursă"
+
+msgid "Media"
+msgstr "Disc"
+
+msgid "Automatic (MVC → original M2TS)"
+msgstr "Automat (MVC → M2TS original)"
+
+msgid "MKV (2D / selected streams)"
+msgstr "MKV (2D / fluxuri selectate)"
+
+msgid "Original M2TS (all streams)"
+msgstr "M2TS original (toate fluxurile)"
+
+msgid "_Blu-ray output"
+msgstr "Ieșire _Blu-ray"
+
+msgid "Output"
+msgstr "Ieșire"
+
+msgid "Choose output MKV or directory"
+msgstr "Alege fișierul MKV sau dosarul de destinație"
+
+msgid "Suggested name without .mkv"
+msgstr "Nume sugerat fără .mkv"
+
+msgid "_Filename"
+msgstr "Nume _fișier"
+
+msgid "Preferences"
+msgstr "Preferințe"
+
+msgid "_Minimum minutes"
+msgstr "_Minute minime"
+
+msgid "_Profile"
+msgstr "_Profil"
+
+msgid "Manage Profiles"
+msgstr "Gestionează profilurile"
+
+msgid "Disc Details"
+msgstr "Detalii disc"
+
+msgid "Verify Copy"
+msgstr "Verifică copia"
+
+msgid "_Inspect"
+msgstr "_Analizează"
+
+msgid "_Copy Selected"
+msgstr "_Copiază selecția"
+
+msgid "Select All"
+msgstr "Selectează tot"
+
+msgid "Show unselected"
+msgstr "Arată elementele neselectate"
+
+msgid "Hide unselected"
+msgstr "Ascunde elementele neselectate"
+
+msgid "No selected items. Use Show unselected to choose."
+msgstr "Niciun element selectat. Folosește Arată elementele neselectate pentru a alege."
+
+msgid "No selected tracks. Use Show unselected to choose."
+msgstr "Nicio pistă selectată. Folosește Arată elementele neselectate pentru a alege."
+
+msgid "Show unselected loaded items without changing the copy selection."
+msgstr "Arată elementele încărcate neselectate fără a modifica selecția pentru copiere."
+
+msgid "Hide unselected items without changing the copy selection."
+msgstr "Ascunde elementele neselectate fără a modifica selecția pentru copiere."
+
+msgid "Preview"
+msgstr "Previzualizare"
+
+msgid ""
+"Play the selected DVD title or one selected Blu-ray playlist in FFplay (2D). "
+"Preview uses the player's tracks, not the copy selections."
+msgstr ""
+"Redă în FFplay (2D) titlul DVD selectat sau o listă de redare Blu-ray "
+"selectată. Previzualizarea folosește pistele playerului, nu selecțiile "
+"pentru copiere."
+
+msgid "Inspect Tracks"
+msgstr "Analizează pistele"
+
+msgid "Select All Tracks"
+msgstr "Selectează toate pistele"
+
+msgid "C_ancel"
+msgstr "_Anulează"
+
+msgid "Clear _All"
+msgstr "Șterge _tot"
+
+msgid ""
+"Reset source, output, selections, and Activity. Saved profiles and choices "
+"are kept."
+msgstr ""
+"Resetează sursa, destinația, selecțiile și activitatea. Profilurile și "
+"opțiunile salvate sunt păstrate."
+
+msgid "Ready"
+msgstr "Gata"
+
+msgid "Operation status"
+msgstr "Starea operației"
+
+msgid "Current media detection, inspection, preview, or copy status"
+msgstr ""
+"Starea curentă a detectării, analizei, previzualizării sau copierii discului"
+
+msgid "Streams or playlists"
+msgstr "Fluxuri sau playlisturi"
+
+msgid "DVD streams or Blu-ray playlists"
+msgstr "Fluxuri DVD sau playlisturi Blu-ray"
+
+msgid "Tracks"
+msgstr "Piste"
+
+msgid "Select one playlist and click Inspect Tracks"
+msgstr "Selectează un playlist și apasă Analizează pistele"
+
+msgid "Blu-ray streams"
+msgstr "Fluxuri Blu-ray"
+
+msgid "Check the video, audio, and subtitle tracks to include in the MKV"
+msgstr "Bifează pistele video, audio și de subtitrare de inclus în MKV"
+
+msgid "Activity"
+msgstr "Activitate"
+
+msgid "Activity output"
+msgstr "Jurnalul activității"
+
+msgid "Enter DVD device, ISO, or folder"
+msgstr "Introdu dispozitivul DVD, fișierul ISO sau dosarul"
+
+msgid "_Source"
+msgstr "_Sursă"
+
+msgid "File"
+msgstr "Fișier"
+
+msgid "Folder"
+msgstr "Dosar"
+
+msgid "Drives"
+msgstr "Unități"
+
+msgid "Close"
+msgstr "Închide"
+
+msgid "Verify Existing Copy"
+msgstr "Verifică o copie existentă"
+
+msgid "Cancel"
+msgstr "Anulează"
+
+msgid "_Select"
+msgstr "_Selectează"
+
+msgid "_Cancel"
+msgstr "_Anulează"
+
+msgid "Verify"
+msgstr "Verifică"
+
+msgid ""
+"Compare an existing copy with the selected source. This rereads the source "
+"and needs temporary disk space."
+msgstr ""
+"Compară o copie existentă cu sursa selectată. Operația recitește sursa și "
+"necesită spațiu temporar pe disc."
+
+msgid "_Playlist"
+msgstr "_Playlist"
+
+msgid "_DVD title"
+msgstr "Titlu _DVD"
+
+msgid "_Stream IDs"
+msgstr "ID-uri _fluxuri"
+
+msgid ""
+"Enter the original stream indexes (DVD) or PIDs (Blu-ray) in copy order, "
+"separated by commas. Leave empty for original M2TS."
+msgstr ""
+"Introdu indicii fluxurilor originale (DVD) sau PID-urile (Blu-ray) în "
+"ordinea copierii, separate prin virgule. Lasă necompletat pentru M2TS "
+"original."
+
+msgid "Copy"
+msgstr "Copie"
+
+msgid "Choose existing MKV or M2TS"
+msgstr "Alege un MKV sau M2TS existent"
+
+msgid "Manage profiles"
+msgstr "Gestionează profilurile"
+
+msgid "Save"
+msgstr "Salvează"
+
+msgid "New"
+msgstr "Nou"
+
+msgid "Delete"
+msgstr "Șterge"
+
+msgid "Automatic"
+msgstr "Automat"
+
+msgid "Original M2TS"
+msgstr "M2TS original"
+
+msgid "_Name"
+msgstr "_Nume"
+
+msgid "_Audio languages"
+msgstr "Limbi _audio"
+
+msgid "_Subtitle languages"
+msgstr "Limbi _subtitrări"
+
+msgid "Media mode selected manually"
+msgstr "Modul suportului a fost selectat manual"
+
+msgid "Choose ISO or image file"
+msgstr "Alege un fișier ISO sau o imagine de disc"
+
+msgid "Choose source folder"
+msgstr "Alege dosarul sursă"
+
+msgid "Choose output"
+msgstr "Alege destinația"
+
+msgid "Choose a source"
+msgstr "Alege o sursă"
+
+msgid "Preserve all streams?"
+msgstr "Se păstrează toate pistele?"
+
+msgid "Playlist {playlist}: preserve all streams as M2TS?"
+msgstr "Lista {playlist}: se păstrează toate pistele în M2TS?"
+
+msgid ""
+"Your filtered selection cannot be applied to original M2TS. Both video views "
+"and all audio/subtitles will be copied."
+msgstr ""
+"Formatul M2TS original nu permite filtrarea pistelor. Vor fi copiate ambele "
+"perspective video și toate pistele audio și de subtitrări."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Choose existing copy"
+msgstr "Alege o copie existentă"
+
+msgid "{phase} (percentage and ETA unavailable)"
+msgstr "{phase} (procentul și timpul rămas nu sunt disponibile)"
+
+msgid "unavailable"
+msgstr "indisponibil"
+
+msgid "{phase} {fraction:.0%} - phase ETA {remaining}"
+msgstr "{phase} {fraction:.0%} - timp rămas pentru etapă: {remaining}"
+
+msgid "Cancelling..."
+msgstr "Se anulează..."
+
+msgid "Verification failed"
+msgstr "Verificarea a eșuat"
+
+msgid "Verification completed"
+msgstr "Verificare încheiată"
+
+msgid "Copy failed"
+msgstr "Copierea a eșuat"
+
+msgid "Copy completed"
+msgstr "Copiere încheiată"
+
+msgid "The operation could not be completed. Open Activity for details."
+msgstr "Operația nu a putut fi finalizată. Deschide Activitate pentru detalii."
+
+msgid ""
+"The copy passed the requested verification checks. Open Activity for the "
+"report."
+msgstr ""
+"Copia a trecut verificările solicitate. Deschide Activitate pentru raport."
+
+msgid "The selected copy operation completed. Open Activity for details."
+msgstr "Copierea selectată s-a încheiat. Deschide Activitate pentru detalii."
+
+msgid "Close DVD to MKV?"
+msgstr "Se închide DVD to MKV?"
+
+msgid "Stop the current operation and close?"
+msgstr "Se oprește operația în curs și se închide aplicația?"
+
+msgid "Close?"
+msgstr "Se închide aplicația?"
+
+msgid ""
+"Source settings could not be saved. Closing now will discard those changes."
+msgstr ""
+"Configurările sursei nu au putut fi salvate. Dacă închizi acum, modificările "
+"se vor pierde."
+
+msgid ""
+"Source settings have not been saved because the source was not identified. "
+"Closing now will discard those changes."
+msgstr ""
+"Configurările nu au fost salvate deoarece sursa nu a fost identificată. Dacă "
+"închizi acum, modificările se vor pierde."
+
+msgid "No"
+msgstr "Nu"
+
+msgid "Retry Save"
+msgstr "Reîncearcă salvarea"
+
+msgid "Yes"
+msgstr "Da"
+
+msgid "Preferences not saved"
+msgstr "Preferințele nu au fost salvate"
+
+msgid "Copy Summary"
+msgstr "Rezumatul copierii"
+
+msgid "Start Copy"
+msgstr "Începe copierea"
+
+msgid "No playlists found"
+msgstr "Nu s-au găsit liste de redare"
+
+msgid "No streams found"
+msgstr "Nu s-au găsit piste"
+
+msgid "Stream inspection failed"
+msgstr "Analiza pistelor a eșuat"
+
+msgid "Awaiting copy confirmation"
+msgstr "Se așteaptă confirmarea copierii"
+
+msgid "Selected tracks"
+msgstr "Piste selectate"
+
+msgid "Playlist {playlist}:"
+msgstr "Lista {playlist}:"
+
+msgid "All tracks (original M2TS; filtering is not applied)."
+msgstr "Toate pistele (M2TS original, fără filtrare)."
+
+msgid "All source tracks (not individually inspected)."
+msgstr "Toate pistele sursei (neanalizate individual)."
+
+msgid "language unspecified"
+msgstr "limbă nespecificată"
+
+msgid "Preparing copy summary..."
+msgstr "Se pregătește rezumatul copierii..."
+
+msgid "Copying..."
+msgstr "Se copiază..."
+
+msgid "Previewing..."
+msgstr "Se redă previzualizarea..."
+
+msgid "Source: {path}"
+msgstr "Sursă: {path}"
+
+msgid "Cannot estimate playlist {playlist}: {error}"
+msgstr "Spațiul pentru lista {playlist} nu poate fi estimat: {error}"
+
+msgid "Invalid source size"
+msgstr "Dimensiunea sursei nu este validă"
+
+msgid "Playlist {playlist} - {format}"
+msgstr "Lista {playlist} - {format}"
+
+msgid "DVD title {playlist} - {format}"
+msgstr "Titlu DVD {playlist} - {format}"
+
+msgid "Output: {path}"
+msgstr "Destinație: {path}"
+
+msgid ""
+"All streams will be retained, including both video views and all audio/"
+"subtitles."
+msgstr ""
+"Vor fi păstrate toate pistele, inclusiv ambele perspective video și toate "
+"pistele audio și de subtitrări."
+
+msgid "Chapter sidecar (if chapters exist): {path}"
+msgstr "Fișierul capitolelor (dacă există capitole): {path}"
+
+msgid ""
+"Estimated peak space including temporary files and reserve: {gib:.2f} GiB "
+"({size} bytes)"
+msgstr ""
+"Spațiu maxim estimat, inclusiv fișierele temporare și rezerva: {gib:.2f} GiB "
+"({size} octeți)"
+
+msgid "Available space: {gib:.2f} GiB ({size} bytes)"
+msgstr "Spațiu disponibil: {gib:.2f} GiB ({size} octeți)"
+
+msgid ""
+"Conservative estimate, not the final output size. Free space is checked "
+"again when copying."
+msgstr ""
+"Estimare prudentă, nu dimensiunea finală. Spațiul liber este verificat din "
+"nou la copiere."
+
+msgid "Not enough free space for this copy selection."
+msgstr "Spațiu liber insuficient pentru copierea selecției."
+
+msgid "e.g. eng, jpn"
+msgstr "de ex. eng, jpn"
+
+msgid "e.g. eng"
+msgstr "de ex. eng"
+
+msgid "A profile with that name already exists; select it to edit it."
+msgstr "Există deja un profil cu acest nume; selectează-l pentru a-l modifica."
+
+msgid "Profile saved, but not applied; see Activity for details."
+msgstr "Profil salvat, dar neaplicat; consultă Activitate pentru detalii."
+
+msgid "Profile updated; save queued."
+msgstr "Profil actualizat; salvarea este în așteptare."
+
+msgid "Profile saved."
+msgstr "Profil salvat."
+
+msgid "The Default profile cannot be deleted."
+msgstr "Profilul implicit nu poate fi șters."
+
+msgid "Profile deleted, but the replacement was not applied; see Activity."
+msgstr ""
+"Profil șters, dar profilul de înlocuire nu a fost aplicat; consultă "
+"Activitate."
+
+msgid "Profile deleted; save queued."
+msgstr "Profil șters; salvarea este în așteptare."
+
+msgid "Profile deleted."
+msgstr "Profil șters."
+
+msgid "Detecting media type..."
+msgstr "Se detectează tipul suportului..."
+
+msgid "Detection failed - select DVD or Blu-ray manually"
+msgstr "Detectarea a eșuat: selectează manual DVD sau Blu-ray"
+
+msgid "Detected Blu-ray"
+msgstr "Blu-ray detectat"
+
+msgid "Detected DVD"
+msgstr "DVD detectat"
+
+msgid "File selection failed - see Activity"
+msgstr "Selectarea fișierului a eșuat: consultă Activitate"
+
+msgid "_Copy"
+msgstr "_Copie"
+
+msgid "_Output"
+msgstr "_Destinație"
+
+msgid "Verifying copy..."
+msgstr "Se verifică copia..."
+
+msgid "Preparing preview..."
+msgstr "Se pregătește previzualizarea..."
+
+msgid "Validating output..."
+msgstr "Se verifică destinația..."
+
+msgid "Inspecting..."
+msgstr "Se analizează..."
+
+msgid "Completed"
+msgstr "Finalizat"
+
+msgid "Cancelled"
+msgstr "Anulat"
+
+msgid "Failed"
+msgstr "Eșuat"
+
+msgid "Verified"
+msgstr "Verificat"
+
+msgid "Loading preferences..."
+msgstr "Se încarcă preferințele..."
+
+msgid "Operation progress"
+msgstr "Progresul operației"
+
+msgid "Current phase progress and estimated time remaining, when available"
+msgstr "Progresul etapei curente și timpul rămas estimat, dacă este disponibil"
+
+msgid ""
+"List DVD titles using lsdvd. Duration and track counts are hints, not "
+"automatic selection."
+msgstr ""
+"Listează titlurile DVD cu lsdvd. Durata și numărul pistelor sunt orientative "
+"și nu determină selectarea automată."
+
+msgid "Drives (cancelling...)"
+msgstr "Unități (se anulează...)"
+
+msgid "Drives (scanning...)"
+msgstr "Unități (se caută...)"
+
+msgid "Cancelling drive scan..."
+msgstr "Se anulează căutarea unităților..."
+
+msgid "Scanning drives..."
+msgstr "Se caută unități..."
+
+msgid "Scan failed; see Activity"
+msgstr "Căutarea a eșuat; consultă Activitate"
+
+msgid "No optical drives found"
+msgstr "Nu s-au găsit unități optice"
+
+msgid "Refresh drives"
+msgstr "Actualizează lista unităților"
+
+msgid "Title {title} (previously selected)"
+msgstr "Titlul {title} (selectat anterior)"
+
+msgid "Preferences are still saving"
+msgstr "Preferințele sunt încă în curs de salvare"
+
+msgid ""
+"The preferences save is taking longer than expected. Closing anyway may lose "
+"pending changes; the in-progress write may still complete after closing, and "
+"its durability is not confirmed. A temporary file may remain."
+msgstr ""
+"Salvarea preferințelor durează mai mult decât era de așteptat. Dacă închizi "
+"acum, modificările în așteptare se pot pierde. Scrierea în curs se poate "
+"termina după închidere, dar salvarea permanentă nu este confirmată. Este "
+"posibil să rămână un fișier temporar."
+
+msgid "Cancel Closing"
+msgstr "Anulează închiderea"
+
+msgid "Close Anyway"
+msgstr "Închide oricum"
+
+msgid "Wait"
+msgstr "Așteaptă"
+
+msgid "Preferences were not safely saved"
+msgstr "Preferințele nu au fost salvate în siguranță"
+
+msgid "Close Without Saving"
+msgstr "Închide fără salvare"
+
+msgid "Retry"
+msgstr "Reîncearcă"
+
+msgid "Streams for playlist {playlist}"
+msgstr "Pistele listei {playlist}"
+
+msgid "Notes"
+msgstr "Note"
+
+msgid "Details truncated to keep the view responsive."
+msgstr "Detaliile au fost scurtate pentru ca interfața să rămână receptivă."
+
+msgid ""
+"These are reported metadata, not a full-disc integrity or playback check."
+msgstr ""
+"Acestea sunt metadatele raportate, nu o verificare completă a integrității "
+"sau redării discului."
+
+msgid "Blu-ray disc"
+msgstr "Disc Blu-ray"
+
+msgid ""
+"A disc's 3D label does not verify MVC in every playlist; candidate playlists "
+"are only hints."
+msgstr ""
+"Marcajul 3D al discului nu confirmă prezența MVC în fiecare listă; listele "
+"candidate sunt doar orientative."
+
+msgid ""
+"Select one playlist and open Disc Details again for its tracks and chapter "
+"markers."
+msgstr ""
+"Selectează o listă și deschide din nou Detalii disc pentru a vedea pistele "
+"și capitolele."
+
+msgid "Playlist {id}"
+msgstr "Lista {id}"
+
+msgid "Playlist {id} / {kind} {pid}"
+msgstr "Lista {id} / {kind} {pid}"
+
+msgid "Playlist {id} {kind}"
+msgstr "Lista {id} {kind}"
+
+msgid "DVD / title {id}"
+msgstr "DVD / titlul {id}"
+
+msgid "DVD title {id}"
+msgstr "Titlul DVD {id}"
+
+msgid "DVD details cover title {id}; this is not a list of every DVD title."
+msgstr ""
+"Detaliile se referă la titlul DVD {id}; aceasta nu este lista tuturor "
+"titlurilor de pe disc."
+
+msgid "Stream {id}"
+msgstr "Pista {id}"
+
+msgid "Chapter {index:03d}"
+msgstr "Capitolul {index:03d}"
+
+msgid "Chapter {index:03d} (seconds)"
+msgstr "Capitolul {index:03d} (secunde)"
+
+msgid "{name} / chapters"
+msgstr "{name} / capitole"
+
+msgid "{name} chapters"
+msgstr "{name}: capitole"
+
+msgid "{name}: showing the first {limit} of {count} entries."
+msgstr "{name}: sunt afișate primele {limit} intrări din {count}."
+
+msgid "{gib:.2f} GiB ({size} bytes)"
+msgstr "{gib:.2f} GiB ({size} octeți)"
+
+msgid "Playlist size"
+msgstr "Dimensiunea listei"
+
+msgid "Playlists"
+msgstr "Liste de redare"
+
+msgid "DVD tracks"
+msgstr "Piste DVD"
+
+msgid "Name"
+msgstr "Nume"
+
+msgid "Volume label"
+msgstr "Eticheta volumului"
+
+msgid "Reported titles"
+msgstr "Titluri raportate"
+
+msgid "Main feature candidate"
+msgstr "Posibil film principal"
+
+msgid "Longest playlist candidate"
+msgstr "Posibila listă cu durata cea mai mare"
+
+msgid "3D content reported"
+msgstr "Conținut 3D raportat"
+
+msgid "Initial mode"
+msgstr "Mod inițial"
+
+msgid "AACS reported"
+msgstr "AACS raportat"
+
+msgid "BD+ reported"
+msgstr "BD+ raportat"
+
+msgid "Java menus"
+msgstr "Meniuri Java"
+
+msgid "Reported duration"
+msgstr "Durată raportată"
+
+msgid "Angles"
+msgstr "Unghiuri"
+
+msgid "Chapters"
+msgstr "Capitole"
+
+msgid "Codec"
+msgstr "Codec"
+
+msgid "Codec name"
+msgstr "Numele codecului"
+
+msgid "Language"
+msgstr "Limbă"
+
+msgid "Format"
+msgstr "Format"
+
+msgid "Aspect ratio"
+msgstr "Raport de aspect"
+
+msgid "Frame rate"
+msgstr "Frecvența cadrelor"
+
+msgid "Reported sample rate"
+msgstr "Rată de eșantionare raportată"
+
+msgid "Duration (seconds)"
+msgstr "Durată (secunde)"
+
+msgid "Reported streams"
+msgstr "Piste raportate"
+
+msgid "Type"
+msgstr "Tip"
+
+msgid "Profile"
+msgstr "Profil"
+
+msgid "Width"
+msgstr "Lățime"
+
+msgid "Height"
+msgstr "Înălțime"
+
+msgid "Channels"
+msgstr "Canale"
+
+msgid "Channel layout"
+msgstr "Configurația canalelor"
+
+msgid "Sample rate (Hz)"
+msgstr "Rată de eșantionare (Hz)"
+
+msgid "Count"
+msgstr "Total"
+
+msgid "video"
+msgstr "video"
+
+msgid "audio"
+msgstr "audio"
+
+msgid "subtitles"
+msgstr "subtitrări"
+
+msgid "main feature candidate"
+msgstr "posibil film principal"
+
+msgid "longest candidate"
+msgstr "posibila listă cu durata cea mai mare"
+
+msgid "longest listed duration"
+msgstr "cea mai mare durată afișată"
+
+msgid "40+ minutes"
+msgstr "cel puțin 40 de minute"
+
+#, python-brace-format
+msgid "Playlist {id}    {duration}    {chapters} chapters"
+msgstr "Lista {id}    {duration}    Capitole: {chapters}"
+
+#, python-brace-format
+msgid ""
+"Title {id}    {duration}    {chapters} chapters, {audio} audio, {subtitles} "
+"subtitles"
+msgstr ""
+"Titlul {id}    {duration}    Capitole: {chapters}, audio: {audio}, "
+"subtitrări: {subtitles}"
+
+#, python-brace-format
+msgid ""
+"Playlist {playlist}: original M2TS preserves ALL streams (filtering disabled)"
+msgstr ""
+"Lista {playlist}: formatul M2TS original păstrează toate pistele (fără "
+"filtrare)"
+
+#, python-brace-format
+msgid "Streams for playlist {playlist} — MKV"
+msgstr "Pistele listei {playlist} — MKV"
+
+msgid "Use DVD mode to inspect and copy one title at a time."
+msgstr "Folosește modul DVD pentru a analiza și copia câte un titlu."
+
+msgid "Use Blu-ray mode to inspect and copy playlists."
+msgstr "Folosește modul Blu-ray pentru a analiza și copia liste de redare."
+
+msgid "Open a disc image as the source."
+msgstr "Deschide o imagine de disc ca sursă."
+
+msgid "Use a folder containing a DVD or Blu-ray as the source."
+msgstr "Folosește ca sursă un dosar care conține un DVD sau un Blu-ray."
+
+msgid "Show detected optical drives and scan for changes."
+msgstr "Afișează unitățile optice detectate și permite actualizarea listei."
+
+msgid "Use the disc in this drive as the source."
+msgstr "Folosește discul din această unitate ca sursă."
+
+msgid "Scan again for optical drives and inserted discs."
+msgstr "Caută din nou unitățile optice și discurile introduse."
+
+msgid "Choose where the copied video will be saved."
+msgstr "Alege unde va fi salvat fișierul video copiat."
+
+msgid "Create or edit reusable language and output settings."
+msgstr ""
+"Creează sau modifică setările reutilizabile pentru limbi și formatul de "
+"ieșire."
+
+msgid "View reported disc or playlist metadata without copying."
+msgstr "Afișează metadatele raportate pentru disc sau listă, fără a copia."
+
+msgid "Compare a saved copy with the original source."
+msgstr "Compară o copie salvată cu sursa originală."
+
+msgid "List tracks for the selected DVD title or playlists on the Blu-ray."
+msgstr ""
+"Afișează pistele titlului DVD selectat sau listele de redare de pe Blu-ray."
+
+msgid "Review the selected content and output paths before copying."
+msgstr "Verifică selecția și destinațiile înainte de copiere."
+
+msgid "Select all inspected DVD tracks or Blu-ray playlists, including hidden items."
+msgstr "Selectează toate pistele DVD sau listele Blu-ray analizate, inclusiv elementele ascunse."
+
+msgid ""
+"List the video, audio, and subtitle tracks in one selected Blu-ray playlist."
+msgstr ""
+"Afișează pistele video, audio și de subtitrări din lista Blu-ray selectată."
+
+msgid "Include every inspected track from the playlist, including hidden tracks."
+msgstr "Include toate pistele analizate ale listei, inclusiv pistele ascunse."
+
+msgid "Request cancellation of the current operation."
+msgstr "Solicită anularea operației în curs."
+
+msgid "Include this item in the copy selection."
+msgstr "Include acest element în selecția de copiat."
+
+msgid "Choose the MKV or M2TS file to verify."
+msgstr "Alege fișierul MKV sau M2TS de verificat."
+
+msgid "Start copying with the settings shown in the summary."
+msgstr "Începe copierea cu setările din rezumat."
+
+msgid "Return to the main window without starting the copy."
+msgstr "Revino la fereastra principală fără a începe copierea."
+
+msgid "Return to the main window without changing the selection."
+msgstr "Revino la fereastra principală fără a schimba selecția."
+
+msgid "Return to the main window without verifying the copy."
+msgstr "Revino la fereastra principală fără a verifica copia."
+
+msgid "Reread the source and compare it with the saved copy."
+msgstr "Citește din nou sursa și compar-o cu copia salvată."
+
+msgid "Close the editor without saving any pending edits."
+msgstr "Închide editorul fără a salva modificările în așteptare."
+
+msgid "Save the current profile settings and apply the profile."
+msgstr "Salvează setările curente ale profilului și aplică profilul."
+
+msgid "Clear the form to create a new profile."
+msgstr "Golește câmpurile pentru a crea un profil nou."
+
+msgid "Remove the selected custom profile."
+msgstr "Șterge profilul personalizat selectat."
+
+msgid "Keep all tracks in the original M2TS without filtering."
+msgstr "Păstrează toate pistele în formatul M2TS original, fără filtrare."
+
+msgid "Keep the current filtered track selection."
+msgstr "Păstrează selecția filtrată a pistelor."
+
+msgid "Close the application without waiting for preferences to load."
+msgstr "Închide aplicația fără a aștepta încărcarea preferințelor."
+
+msgid "Continue without saving settings for this session."
+msgstr "Continuă fără a salva setările din această sesiune."
+
+msgid "Keep waiting for preferences to load."
+msgstr "Așteaptă în continuare încărcarea preferințelor."
+
+msgid "Keep the application open."
+msgstr "Lasă aplicația deschisă."
+
+msgid "Try saving the pending settings again."
+msgstr "Încearcă din nou să salvezi setările în așteptare."
+
+msgid "Close the application, stopping any active operation."
+msgstr "Închide aplicația și oprește orice operație în curs."
+
+msgid "Keep waiting for the current save to finish."
+msgstr "Așteaptă în continuare finalizarea salvării."
+
+msgid "Close now even if pending settings may be lost."
+msgstr "Închide acum, chiar dacă setările în așteptare s-ar putea pierde."
+
+msgid "Close without saving the pending settings."
+msgstr "Închide fără a salva setările în așteptare."

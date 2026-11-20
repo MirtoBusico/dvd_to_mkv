@@ -29,6 +29,7 @@ from dvdvideo.gui_listing import (
 )
 from dvdvideo.gui_preferences import Profile, SourcePreferences
 from dvdvideo.gui_selection import SelectionCoordinator
+from dvdvideo.gui_translation import identity
 
 
 class ListingPresenter(Protocol):
@@ -56,6 +57,7 @@ class ListingWorkflowHooks:
     streams_changed: Callable[[], None]
     update_stream_format: Callable[[str], None]
     clean_label: Callable[[str], str]
+    translate: Callable[[str], str] = identity
 
 
 class ListingWorkflow:
@@ -76,8 +78,11 @@ class ListingWorkflow:
             self.selection.requires_reinspection = requires_reinspection
         context = self.get_context()
         settings = context.settings
-        parser = parse_playlists if context.is_bluray else parse_dvd_streams
-        listing = parser(output) if isinstance(output, str) else output
+        if isinstance(output, str):
+            listing = (parse_playlists(output, translate=self.hooks.translate) if context.is_bluray
+                       else parse_dvd_streams(output))
+        else:
+            listing = output
         self.selection.record_listing_metadata(listing, is_bluray=context.is_bluray)
         if context.is_bluray:
             selected = set(settings.playlists) if settings is not None else set[str]()
@@ -140,7 +145,10 @@ class ListingWorkflow:
         if not rows:
             name = "Blu-ray playlists" if context.is_bluray else "DVD streams"
             self.hooks.log(f"No {name} found in the inspection output. See Activity for details.")
-            self.hooks.set_status(f"No {kind} found")
+            if context.is_bluray:
+                self.hooks.set_status("No playlists found")
+            else:
+                self.hooks.set_status("No streams found")
         elif context.is_bluray:
             if settings is None:
                 self.hooks.save()

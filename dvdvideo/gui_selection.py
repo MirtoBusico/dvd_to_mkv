@@ -101,9 +101,12 @@ class SelectionState:
         self, previous: SourcePreferences | None, *, is_bluray: bool,
         selected: list[str], inspected_streams: dict[str, list[str]],
         profile_name: str, output_format: str, minimum_minutes: int,
+        dvd_title: str = "1",
     ) -> SourcePreferences:
         listing_loaded = self.loaded_mode is not None and self.loaded_mode == is_bluray
         previous = previous or SourcePreferences(dvd_inspected=False)
+        if not is_bluray and previous.dvd_title != dvd_title:
+            previous = replace(previous, dvd_streams=[], dvd_inspected=False, dvd_title=dvd_title)
         selected = self.selected_ids(previous, is_bluray=is_bluray, selected=selected)
         streams = {key: list(value) for key, value in previous.playlist_streams.items()}
         if listing_loaded and is_bluray:
@@ -116,6 +119,7 @@ class SelectionState:
             playlists=list(selected) if listing_loaded and is_bluray else list(previous.playlists),
             playlist_streams=streams,
             dvd_inspected=previous.dvd_inspected or (listing_loaded and not is_bluray),
+            dvd_title=previous.dvd_title if is_bluray else dvd_title,
         )
 
 
@@ -137,6 +141,7 @@ class SelectionCoordinator:
 
     selection_state: SelectionState = field(default_factory=SelectionState)
     active_source: str = ""
+    dvd_title: str = "1"
     stream_playlist: str | None = None
     playlist_streams: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     playlist_mvc: dict[str, bool] = field(default_factory=dict[str, bool])
@@ -162,6 +167,19 @@ class SelectionCoordinator:
         self.stale_track_info.clear()
         self.dvd_track_info.clear()
         self.requires_reinspection = False
+
+    def change_dvd_title(self, title: str) -> None:
+        from dvdvideo.gui_commands import validate_dvd_title
+
+        validate_dvd_title(title)
+        self.clear()
+        self.reinspection_edits = None
+        if self.restored_source is not None:
+            self.restored_source.row_edits = {
+                key: value for key, value in self.restored_source.row_edits.items() if key[0]
+            }
+        self.dvd_title = title
+        self.mark_source_edit("selection")
 
     def source_preferences(self, store: PreferencesStore | None, source: str) -> SourcePreferences | None:
         if store is None or not source:
@@ -425,7 +443,7 @@ class SelectionCoordinator:
                 if key not in self.selection_state.pending_streams
             },
             profile_name=profile_name,
-            output_format=output_format, minimum_minutes=minimum_minutes,
+            output_format=output_format, minimum_minutes=minimum_minutes, dvd_title=self.dvd_title,
         )
 
     def persist_source(

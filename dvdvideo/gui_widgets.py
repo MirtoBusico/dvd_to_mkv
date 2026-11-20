@@ -13,6 +13,8 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gdk, GObject, Gtk  # type: ignore[reportMissingModuleSource]
 
+from dvdvideo.gui_translation import identity
+
 
 class Choice(Gtk.DropDown):
     """A drop-down with stable identifiers separate from its displayed labels."""
@@ -83,8 +85,8 @@ class ResponseWindow(Gtk.Window):
             return True
         return False
 
-    def add_button(self, label: str, response: int, *, default: bool = False) -> Gtk.Button:
-        button = Gtk.Button(label=label)
+    def add_button(self, label: str, response: int, *, tooltip: str, default: bool = False) -> Gtk.Button:
+        button = Gtk.Button(label=label, tooltip_text=tooltip)
         button.connect("clicked", lambda *_args: self.response(response))
         self._buttons.append(button)
         if default:
@@ -105,14 +107,15 @@ def add_field_label(row: Gtk.Box, text: str, widget: Gtk.Widget) -> None:
 
 
 def add_path_row(
-    parent: Gtk.Box, label: str, placeholder: str, callback: Callable[..., object]
+    parent: Gtk.Box, label: str, placeholder: str, callback: Callable[..., object],
+    *, tooltip: str, translate: Callable[[str], str] = identity,
 ) -> Gtk.Entry:
     row = Gtk.Box(spacing=8)
     entry = Gtk.Entry(hexpand=True, placeholder_text=placeholder)
     entry.set_activates_default(True)
-    add_field_label(row, f"_{label}", entry)
+    add_field_label(row, translate(f"_{label}"), entry)
     row.append(entry)
-    button = Gtk.Button(label="Browse")
+    button = Gtk.Button(label=translate("Browse"), tooltip_text=translate(tooltip))
     button.connect("clicked", callback)
     row.append(button)
     parent.append(row)

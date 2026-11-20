@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+# Keep captured metadata out of the environment even under bash -a.
+set +a
+# Keep the background launcher's PID tied to the session that setsid creates.
+set +m
+shopt -u nocasematch xpg_echo
 
 usage() {
     cat <<'EOF'
@@ -22,7 +27,8 @@ TITLE_OR_PLAYLIST defaults to 1.
 
 Use --list-streams to print each stream's index, type, codec, language, and title.
 Use --list-streams-tsv for the same DVD metadata as tab-separated values.
-Use --disc-details for read-only JSON metadata (requires jq; DVD title 1 by default).
+Use --disc-details for read-only JSON metadata (requires jq and, for DVDs,
+python3; DVD title 1 by default).
 Use --list-titles to list DVD titles with lsdvd.
 If DVD inspection fails on an omitted title, lsdvd and jq can find one
 alternative to try. Explicit titles and copy commands never switch titles.
@@ -35,21 +41,24 @@ Repeat --stream INDEX or pass comma-separated indexes to copy only selected stre
 For Blu-ray, --playlist ID --list-streams lists stream PIDs for one playlist.
 Repeat --stream-id ID:PID to keep only those PIDs for that playlist (for example 0:0x1100).
 Playlists without --stream-id selections copy all streams.
-Use --list-playlists to show Blu-ray playlists at least MINUTES long (default: 2).
-Repeat --playlist ID to copy selected Blu-ray playlists. OUTPUT defaults to the current directory;
-with one playlist it may be an MKV filename, otherwise it must be an existing directory (a
-missing one is not created automatically).
+Use --list-playlists to show Blu-ray playlists at least MINUTES long
+(0-4294967295, default: 2).
+Repeat --playlist ID to copy selected Blu-ray playlists. OUTPUT defaults to the
+current directory. With one playlist it may be a filename for the resolved
+format; otherwise it must be an existing directory.
 If a batch fails, completed copies are kept. Rerun only playlists not yet copied.
 Use --keydb to set the AACS KEYDB.cfg; if omitted, one is auto-detected under ~/.config/aacs/,
 otherwise bluray_copy/bluray_info fall back to their own default AACS database.
 Use --retries N to retry a failed or invalid disc copy up to N extra times (0-9999, default: 0).
-Use --output-name NAME with Blu-ray output directories to name a single playlist NAME.mkv,
-or multiple playlists NAME-playlist-ID.mkv. An explicit output file takes precedence
+Use --output-name NAME with Blu-ray output directories to name a single playlist NAME.EXT,
+or multiple playlists NAME-playlist-ID.EXT. Each playlist uses its resolved
+extension (.mkv or .m2ts). An explicit output file takes precedence
 and prints a warning if --output-name was also supplied.
 Repeat --playlist-output-name ID:FILENAME to name individual Blu-ray playlist outputs in a directory.
 Each filename must end in the playlist's resolved .mkv or .m2ts extension.
 Playlist listings include a "# disc-name" metadata line when a disc name or UDF title exists.
-3D discs include compatibility warnings; stream inspection also requires FFprobe with Blu-ray support.
+3D discs include compatibility warnings; 3D stream inspection also requires
+FFprobe with Blu-ray support, bluray_copy, and python3.
 Use --output-format auto|mkv|m2ts for Blu-ray (default: auto).
 Auto preserves all streams as M2TS when MVC payload is verified in a playlist sample.
 If the Blu-ray reader cannot report the disc's 3D status, choose a format explicitly.
@@ -118,15 +127,23 @@ pending_output=
 pending_chapter_sidecar=
 pending_chapter_source=
 inspection_pid=
+inspection_timed_out=false
 inspection_file=
 inspection_error_file=
-inspection_timeout_file=
+inspection_status_file=
+arguments_snapshot=
 completed_playlists=0
 active_process_group=
+copy_launching=false
+copy_cancel_status=0
 readonly MAX_ARGUMENT_FILE_BYTES=$((16 * 1024 * 1024))
 readonly MAX_ARGUMENT_FILE_ARGUMENTS=225000
 readonly MAX_INSPECTION_BYTES=$((16 * 1024 * 1024))
-IFS= read -r -d '' module_directory < <(dirname -z -- "$(readlink -f -- "$0")")
+if ! IFS= read -r -d '' script_path < <(readlink -fz -- "$0") \
+    || ! IFS= read -r -d '' module_directory < <(dirname -z -- "$script_path"); then
+    printf 'Could not resolve the launcher directory: %s\n' "$0" >&2
+    exit 1
+fi
 python_module_path=$module_directory
 if [[ -n ${PYTHONPATH:-} ]]; then
     declare -a inherited_python_path_entries=()
@@ -142,79 +159,124 @@ if [[ -x $module_directory/dvdvideo-python ]]; then
     python_command=$module_directory/dvdvideo-python
 fi
 
+finish_inspection() {
+    # timeout can exit before the group is empty, including if its grace delay fails.
+    kill -KILL -- "-$inspection_pid" 2>/dev/null || true
+    inspection_pid=
+}
+
 cleanup() {
-    local status=$?
+    local status=$? cleanup_failed=false scratch
     if (( status != 0 && completed_playlists > 0 && completed_playlists < ${#selected_playlists[@]} )); then
         printf 'Batch incomplete: %d of %d playlists copied. Completed outputs were kept; rerun only playlists not yet copied.\n' \
-            "$completed_playlists" "${#selected_playlists[@]}" >&2
+            "$completed_playlists" "${#selected_playlists[@]}" >&2 || true
     fi
     if [[ -n $inspection_pid ]]; then
         kill -TERM "$inspection_pid" 2>/dev/null || true
         wait "$inspection_pid" 2>/dev/null || true
-        inspection_pid=
+        finish_inspection
     fi
     if [[ -n $active_process_group ]]; then
         stop_active_process_group
     fi
-    if [[ -n $inspection_file ]]; then
-        rm -f -- "$inspection_file"
-    fi
-    if [[ -n $inspection_error_file ]]; then
-        rm -f -- "$inspection_error_file"
-    fi
-    if [[ -n $inspection_timeout_file ]]; then
-        rm -f -- "$inspection_timeout_file"
-    fi
     if [[ $publication_pending == true ]]; then
         # Remove only links created by this attempt, never a competing destination.
         if [[ ! -L $pending_output && $pending_output -ef $temporary_output ]]; then
-            rm -f -- "$pending_output"
+            rm -f -- "$pending_output" || cleanup_failed=true
         fi
         if [[ -n $pending_chapter_sidecar && ! -L $pending_chapter_sidecar \
             && $pending_chapter_sidecar -ef $pending_chapter_source ]]; then
-            rm -f -- "$pending_chapter_sidecar"
+            rm -f -- "$pending_chapter_sidecar" || cleanup_failed=true
         fi
     fi
+    for scratch in "$inspection_file" "$inspection_error_file" "$inspection_status_file" "$arguments_snapshot"; do
+        if [[ -n $scratch ]]; then
+            rm -f -- "$scratch" || cleanup_failed=true
+        fi
+    done
     if [[ -n $temporary_directory ]]; then
-        rm -rf "$temporary_directory"
+        rm -rf -- "$temporary_directory" || cleanup_failed=true
+    fi
+    if (( status == 0 )) && [[ $cleanup_failed == true ]]; then
+        exit 1
     fi
 }
 
 run_inspection() {
-    local seconds=${DVD_BACKUP_INSPECTION_TIMEOUT-60} status=0 output_size error_size timed_out=false
+    local seconds=${DVD_BACKUP_INSPECTION_TIMEOUT-60} status=0 output_size error_size
+    local block_bytes=1024 limit_bytes=$MAX_INSPECTION_BYTES limit_label='16 MiB' REPLY
+    local first second third soft inherited_bytes=
+    inspection_timed_out=false
     if [[ ! $seconds =~ ^[1-9][0-9]{0,3}$ ]]; then
         echo 'DVD_BACKUP_INSPECTION_TIMEOUT must be 1 to 9999 seconds.' >&2
-        return 2
+        exit 2
     fi
     if ! command -v timeout >/dev/null; then
         echo 'Media inspection requires GNU timeout.' >&2
         return 127
     fi
-    if [[ -z $inspection_file ]]; then
-        inspection_file=$(mktemp) || return
-        inspection_error_file=$(mktemp) || return
-        inspection_timeout_file=$(mktemp) || return
+    require_commands sleep
+    # Bash uses 512-byte blocks in POSIX mode, 1024-byte blocks otherwise.
+    if shopt -oq posix; then
+        block_bytes=512
     fi
-    : > "$inspection_file"
-    : > "$inspection_error_file"
-    : > "$inspection_timeout_file"
+    # Bash reports limits in whole blocks; procfs exposes the exact byte count.
+    while IFS=$' \t' read -r first second third soft _; do
+        if [[ $first == Max && $second == file && $third == size ]]; then
+            inherited_bytes=$soft
+            break
+        fi
+    done </proc/self/limits
+    if [[ $inherited_bytes != unlimited && ! $inherited_bytes =~ ^[0-9]+$ ]]; then
+        echo 'Could not determine the inherited media inspection file-size limit.' >&2
+        return 1
+    fi
+    if [[ $inherited_bytes != unlimited ]] \
+        && (( ${#inherited_bytes} <= ${#MAX_INSPECTION_BYTES} && inherited_bytes < MAX_INSPECTION_BYTES )); then
+        limit_bytes=$inherited_bytes
+        limit_label="$limit_bytes bytes"
+    fi
+    if [[ -z $inspection_file ]]; then
+        if ! inspection_file=$(mktemp) \
+            || ! inspection_error_file=$(mktemp) \
+            || ! inspection_status_file=$(mktemp); then
+            echo 'Could not create media inspection scratch files.' >&2
+            exit 1
+        fi
+    fi
+    if ! { : >| "$inspection_file" && : >| "$inspection_error_file" && : >| "$inspection_status_file"; }; then
+        echo 'Could not reset media inspection scratch files.' >&2
+        exit 1
+    fi
     # Waiting on an async child lets the EXIT trap forward a shell-only signal.
     (
-        ulimit -f "$((MAX_INSPECTION_BYTES / 1024))"
+        if (( limit_bytes == MAX_INSPECTION_BYTES )); then
+            ulimit -f "$((limit_bytes / block_bytes))" || exit 1
+        fi
         # shellcheck disable=SC2016
-        exec timeout --signal=USR1 --kill-after=2s "${seconds}s" "$BASH" -c '
+        exec timeout --kill-after=2s "${seconds}s" "$BASH" -c '
+            set +m
             marker=$1
             shift
-            trap '\''printf 1 > "$marker"'\'' USR1
-            "$@"
-        ' bash "$inspection_timeout_file" "$@"
-    ) >"$inspection_file" 2>"$inspection_error_file" &
+            # Keep timeout armed for the entire group, even if the reader exits.
+            trap '\''trap "" TERM; sleep infinity; exit 143'\'' TERM
+            "$@" &
+            status=0
+            wait "$!" || status=$?
+            printf "%s\n" "$status" >| "$marker" || exit 1
+            exit "$status"
+        ' bash "$inspection_status_file" "$@"
+    ) >|"$inspection_file" 2>|"$inspection_error_file" &
     inspection_pid=$!
     wait "$inspection_pid" || status=$?
-    inspection_pid=
-    cat -- "$inspection_error_file" >&2
-    if [[ -s $inspection_timeout_file ]]; then
-        timed_out=true
+    finish_inspection
+    if [[ ! -s $inspection_status_file ]] && (( status == 124 || status == 137 )); then
+        inspection_timed_out=true
+        printf 'Media inspection did not complete: %s (timeout %s seconds).\n' "${1##*/}" "$seconds" >&2
+        if error_size=$(stat -c '%s' -- "$inspection_error_file") && (( error_size < limit_bytes )); then
+            cat -- "$inspection_error_file" >&2 || true
+        fi
+        return 124
     fi
     if ! output_size=$(stat -c '%s' -- "$inspection_file"); then
         echo 'Could not determine media inspection output size.' >&2
@@ -224,18 +286,20 @@ run_inspection() {
         echo 'Could not determine media inspection diagnostic size.' >&2
         return 1
     fi
-    if (( output_size >= MAX_INSPECTION_BYTES )); then
-        echo 'Media inspection output reached the 16 MiB limit; refusing incomplete or oversized metadata.' >&2
+    if (( error_size >= limit_bytes )); then
+        printf 'Media inspection diagnostics reached the %s limit; refusing excessive tool output.\n' "$limit_label" >&2
         return 1
     fi
-    if (( error_size >= MAX_INSPECTION_BYTES )); then
-        echo 'Media inspection diagnostics reached the 16 MiB limit; refusing excessive tool output.' >&2
+    cat -- "$inspection_error_file" >&2
+    if (( output_size >= limit_bytes )); then
+        printf 'Media inspection output reached the %s limit; refusing incomplete or oversized metadata.\n' "$limit_label" >&2
         return 1
-    fi
-    if [[ $timed_out == true ]]; then
-        printf 'Media inspection did not complete: %s (timeout %s seconds).\n' "${1##*/}" "$seconds" >&2
     fi
     (( status == 0 )) || return "$status"
+    if LC_ALL=C IFS= read -r -d '' <"$inspection_file"; then
+        echo 'Media inspection output contains a NUL byte; refusing malformed metadata.' >&2
+        return 1
+    fi
     cat -- "$inspection_file"
 }
 
@@ -245,31 +309,60 @@ capture_inspection() {
 }
 
 stop_active_process_group() {
-    local process_group=$active_process_group
+    local process_group=$active_process_group group_only=${1:-false}
     [[ -n $process_group ]] || return 0
-    require_commands sleep
-
-    kill -TERM -- "-$process_group" 2>/dev/null || true
+    # Before setsid creates the group, the launcher is reachable only by PID.
+    if ! kill -TERM -- "-$process_group" 2>/dev/null && [[ $group_only == false ]]; then
+        kill -TERM "$process_group" 2>/dev/null || true
+        kill -TERM -- "-$process_group" 2>/dev/null || true
+    fi
     for _ in {1..30}; do
-        kill -0 -- "-$process_group" 2>/dev/null || break
-        sleep 0.1
+        if ! kill -0 -- "-$process_group" 2>/dev/null \
+            && { [[ $group_only == true ]] || ! kill -0 "$process_group" 2>/dev/null; }; then
+            break
+        fi
+        if ! sleep 0.1; then
+            echo 'Could not wait for copy termination; escalating to SIGKILL.' >&2
+            break
+        fi
     done
-    kill -KILL -- "-$process_group" 2>/dev/null || true
+    if ! kill -KILL -- "-$process_group" 2>/dev/null && [[ $group_only == false ]]; then
+        kill -KILL "$process_group" 2>/dev/null || true
+        kill -KILL -- "-$process_group" 2>/dev/null || true
+    fi
     wait "$process_group" 2>/dev/null || true
     active_process_group=
 }
 
 run_copy_command() {
+    require_commands setsid sleep
+    local status=0
+    copy_launching=true
     setsid -- "$@" &
     active_process_group=$!
-    local status=0
+    copy_launching=false
+    if (( copy_cancel_status != 0 )); then
+        handle_signal "$copy_cancel_status"
+    fi
     wait "$active_process_group" || status=$?
-    active_process_group=
+    if kill -0 -- "-$active_process_group" 2>/dev/null; then
+        printf 'Copy command exited with helpers still running: %s. Stopping them and rejecting the attempt.\n' "${1##*/}" >&2
+        stop_active_process_group true
+        if (( status == 0 )); then
+            status=1
+        fi
+    else
+        active_process_group=
+    fi
     return "$status"
 }
 
 handle_signal() {
     local status=$1
+    if [[ $copy_launching == true ]]; then
+        copy_cancel_status=$status
+        return
+    fi
     trap - INT TERM
     if [[ -n $active_process_group ]]; then
         stop_active_process_group
@@ -280,6 +373,14 @@ handle_signal() {
 validate_disc_details() {
     local media=$1 playlist=${2:-}
     if ! jq -se --arg media "$media" --arg playlist "$playlist" '
+        def valid_pid:
+            type == "string" and test("\\A0x0{0,4}[0-9a-fA-F]{1,4}\\z") and
+            (ascii_downcase | sub("^0x0*"; "") | test("\\A(?:[0-9a-f]{0,3}|1[0-9a-f]{3})\\z"));
+        def valid_chapters($start):
+            type == "array" and all(.[];
+                type == "object" and (.[$start] | type == "string" or type == "number" or type == "boolean"));
+        def valid_tracks:
+            type == "array" and all(.[]; type == "object" and (.stream | valid_pid));
         length == 1 and (.[0] |
             if type != "object" then false
             elif $media == "DVD" then
@@ -287,28 +388,44 @@ validate_disc_details() {
                 (.streams | type == "array" and
                     all(.[]; type == "object" and
                         (.index | type == "number" and . >= 0 and . <= 9999 and . == floor)) and
-                    (length == (map(.index) | unique | length)))
+                    (length == (map(.index) | unique | length))) and
+                (if has("chapters") then .chapters | valid_chapters("start_time") else true end)
             else
                 (.bluray | type == "object") and
                 (.titles | type == "array" and all(.[];
-                    type == "object" and (.playlist | tostring | test("^[0-9]{1,5}$")))) and
+                    type == "object" and (.playlist | tostring | test("\\A[0-9]{1,5}\\z")) and
+                    (if has("video") then .video | valid_tracks else true end) and
+                    (if has("audio") then .audio | valid_tracks else true end) and
+                    (if has("subtitles") then .subtitles | valid_tracks else true end) and
+                    (if has("chapters") then .chapters | valid_chapters("start time") else true end)) and
+                    (length == (map(.playlist | tonumber) | unique | length))) and
                 ($playlist == "" or
                     (.titles | length == 1 and (.[0].playlist | tonumber) == ($playlist | tonumber)))
             end)
-    ' >/dev/null 2>&1 <<<"$inspection_output"; then
+    ' >/dev/null 2>&1 <<<"$inspection_output" ||
+        { [[ $media == DVD ]] && ! "$python_command" -P -c '
+import json
+import sys
+
+# jq can normalize decimal and exponent forms, but the GUI requires JSON integers.
+streams = json.load(sys.stdin)["streams"]
+sys.exit(not all(type(stream["index"]) is int for stream in streams))
+' <<<"$inspection_output"; }; then
         printf 'Invalid or incomplete %s disc details returned by the metadata reader.\n' "$media" >&2
         return 1
     fi
 }
 
-make_temporary_workspace() {
+pin_output_directory() {
     local output_directory=$1
-    local owner mode hardlink_probe
-    require_commands ln sync
+    local owner mode
 
     # Pin the directory before checking it: ancestor renames/symlink swaps must
     # not redirect subsequent writes or rollback to another directory.
-    exec {workspace_parent_fd}< "$output_directory"
+    if ! exec {workspace_parent_fd}< "$output_directory"; then
+        echo "Cannot open output directory: $output_directory" >&2
+        exit 1
+    fi
     workspace_parent=/proc/$$/fd/$workspace_parent_fd
     if [[ ! -d $workspace_parent ]] \
         || ! read -r owner mode < <(stat -Lc '%u %a' -- "$workspace_parent") \
@@ -317,6 +434,13 @@ make_temporary_workspace() {
         echo "Unsafe output directory: must be owned by you or root and not group/other-writable unless sticky: $output_directory" >&2
         exit 1
     fi
+}
+
+make_temporary_workspace() {
+    local output_directory=$1
+    local hardlink_probe
+    require_commands ln sync
+
     local sync_help
     if ! command -v sync >/dev/null \
         || ! sync_help=$(sync --help 2>&1) \
@@ -341,6 +465,18 @@ make_temporary_workspace() {
     rm -f -- "$hardlink_probe" "$hardlink_probe.link"
 }
 
+normalize_directory_path() {
+    local path=$1
+    while [[ $path != / ]]; do
+        case $path in
+            */.) path=${path%/.}; path=${path:-/} ;;
+            */) path=${path%/} ;;
+            *) break ;;
+        esac
+    done
+    printf '%s\0' "$path"
+}
+
 find_keydb() {
     local candidate
 
@@ -354,17 +490,24 @@ find_keydb() {
     return 1
 }
 
-probe_mvc() {
+check_mvc_tools() {
     if ! command -v "$python_command" >/dev/null || ! command -v bluray_copy >/dev/null; then
         echo 'MVC payload inspection requires python3 and bluray_copy.' >&2
         return 1
     fi
+}
+
+probe_mvc() {
+    check_mvc_tools || return 1
     # The timed Bash child expands these positional arguments.
     # shellcheck disable=SC2016
     PYTHONPATH="$python_module_path" capture_inspection "$BASH" -c '
+        set +m
         playlist=$1
         python_command=$2
         shift 2
+        # Inspect both statuses even if inherited errexit and pipefail are on.
+        set +e
         bluray_copy "$@" --playlist "$playlist" --output - |
             "$python_command" -P -m dvdvideo.mvc_probe
         statuses=("${PIPESTATUS[@]}")
@@ -392,9 +535,19 @@ playlist_output_path() {
     fi
 }
 
+check_m2ts_sidecar() {
+    local pinned_output=$1 display_output=$2
+    if [[ -e $pinned_output.chapters.txt || -L $pinned_output.chapters.txt ]]; then
+        echo "Refusing to overwrite existing file: $display_output.chapters.txt" >&2
+        echo "The existing sidecar could be mistaken for this copy's chapters. Move it aside or choose a different output filename." >&2
+        exit 1
+    fi
+}
+
 publish_output() {
     local output_file=$workspace_parent/${1##*/}
     local chapter_file=${2:-}
+    local format=${3:-mkv}
 
     if [[ ! -f $temporary_output || -L $temporary_output ]] \
         || { [[ -n $chapter_file ]] && [[ ! -f $chapter_file || -L $chapter_file ]]; }; then
@@ -413,6 +566,8 @@ publish_output() {
             echo "Failed to publish chapters (existing files are not overwritten): $1.chapters.txt" >&2
             exit 1
         fi
+    elif [[ $format == m2ts ]]; then
+        check_m2ts_sidecar "$output_file" "$1"
     fi
 
     if ! ln -T -- "$temporary_output" "$output_file"; then
@@ -427,34 +582,38 @@ publish_output() {
         echo "Failed to flush published output to storage: $1" >&2
         exit 1
     fi
-    publication_pending=false
+    if [[ $media_type == bluray ]]; then
+        # Commit the rollback state and batch count in the same shell command.
+        publication_pending=false completed_playlists=$((completed_playlists + 1))
+        if [[ -n $chapter_file ]]; then
+            printf 'Chapters: %s.chapters.txt (playlist-relative markers; player support varies)\n' "$1" >&2
+        fi
+        printf 'Copied: %s\n' "$1"
+    else
+        publication_pending=false
+    fi
     rm -rf "$temporary_directory"
     temporary_directory=
     temporary_output=
     temporary_copy=
-    exec {workspace_parent_fd}<&-
-    workspace_parent_fd=
-    workspace_parent=
 }
 
 validate_output_filename() {
-    local path=$1 directory filename limit
+    local path=$1 quiet=${2:-false} directory filename limit
     local LC_ALL=C
     require_commands getconf
 
     filename=${path##*/}
-    directory=${path%/*}
-    if [[ $directory == "$path" ]]; then
-        directory=.
-    elif [[ -z $directory ]]; then
-        directory=/
-    fi
+    directory=$workspace_parent
     if ! limit=$(getconf NAME_MAX "$directory"); then
         echo "Cannot determine output filename limit: $directory" >&2
         exit 1
     fi
     if [[ $limit =~ ^[0-9]+$ ]]; then
         if (( limit > 0 && ${#filename} > limit )); then
+            if [[ $quiet == true ]]; then
+                return 2
+            fi
             echo "Output filename exceeds the filesystem's $limit-byte limit: $path" >&2
             exit 2
         fi
@@ -474,7 +633,17 @@ if [[ ${1:-} == --arguments-file ]]; then
         echo '--arguments-file requires one readable regular file.' >&2
         exit 2
     fi
-    if ! arguments_size=$(stat -L -c '%s' -- "$2"); then
+    require_commands head tail
+    arguments_snapshot=$(mktemp) || exit 1
+    arguments_path=$2
+    if [[ $arguments_path == - ]]; then
+        arguments_path=./-
+    fi
+    if ! head -c "$((MAX_ARGUMENT_FILE_BYTES + 1))" -- "$arguments_path" >|"$arguments_snapshot"; then
+        echo 'Could not read arguments file.' >&2
+        exit 2
+    fi
+    if ! arguments_size=$(stat -c '%s' -- "$arguments_snapshot"); then
         echo 'Could not determine arguments-file size.' >&2
         exit 2
     fi
@@ -482,15 +651,18 @@ if [[ ${1:-} == --arguments-file ]]; then
         echo 'Arguments file exceeds the 16 MiB size limit.' >&2
         exit 2
     fi
-    mapfile -d '' -t -n "$((MAX_ARGUMENT_FILE_ARGUMENTS + 2))" arguments < "$2"
+    mapfile -d '' -t -n "$((MAX_ARGUMENT_FILE_ARGUMENTS + 2))" arguments < "$arguments_snapshot"
     if (( ${#arguments[@]} > MAX_ARGUMENT_FILE_ARGUMENTS + 1 )); then
         echo "Arguments file exceeds the $MAX_ARGUMENT_FILE_ARGUMENTS argument limit." >&2
         exit 2
     fi
-    if [[ ${#arguments[@]} -eq 0 || ${arguments[-1]} != --end-arguments-file ]]; then
+    if [[ ${#arguments[@]} -eq 0 || ${arguments[-1]} != --end-arguments-file ]] \
+        || ! IFS= read -r -d '' < <(tail -c 1 -- "$arguments_snapshot"); then
         echo 'Invalid or incomplete arguments file.' >&2
         exit 2
     fi
+    rm -f -- "$arguments_snapshot"
+    arguments_snapshot=
     unset 'arguments[-1]'
     set -- "${arguments[@]}"
     unset arguments
@@ -628,11 +800,13 @@ while [[ $# -gt 0 ]]; do
                     playlist_names[$id]=$stem
                     ;;
                 --minlength)
-                    if ! [[ $2 =~ ^[0-9]+$ ]]; then
-                        echo '--minlength must be a non-negative number of minutes.' >&2
+                    # bluray_info reads minutes as an unsigned 32-bit value.
+                    if [[ -z $2 || ! $2 =~ ^0*([1-9][0-9]{0,9})?$ ]] \
+                        || (( 10#${BASH_REMATCH[1]:-0} > 4294967295 )); then
+                        echo '--minlength requires a number of minutes from 0 to 4294967295.' >&2
                         exit 2
                     fi
-                    minlength=$2
+                    minlength=${BASH_REMATCH[1]:-0}
                     minlength_set=true
                     ;;
                 --playlist)
@@ -730,7 +904,8 @@ if [[ $media_type == bluray ]]; then
         exit 2
     fi
     if [[ -d $device ]]; then
-        IFS= read -r -d '' device_folder < <(basename -z -- "$device")
+        IFS= read -r -d '' device < <(normalize_directory_path "$device")
+        device_folder=${device##*/}
         if [[ ${device_folder^^} == BDMV ]]; then
             IFS= read -r -d '' device < <(dirname -z -- "$device")
         fi
@@ -746,7 +921,7 @@ if [[ $media_type == bluray ]]; then
         exit 2
     fi
     if [[ -n $keydb ]]; then
-        if ! keydb_metadata=$(stat -c '%u %a' -- "$keydb"); then
+        if ! keydb_metadata=$(stat -Lc '%u %a' -- "$keydb"); then
             echo "Could not inspect KEYDB.cfg ownership and permissions: $keydb" >&2
             exit 1
         fi
@@ -820,11 +995,13 @@ if [[ $media_type == bluray ]]; then
                 echo 'Inspecting 3D video streams requires ffprobe with Blu-ray protocol support.' >&2
                 exit 1
             fi
+            check_mvc_tools || exit 1
             capture_inspection ffprobe -v error -playlist "${selected_playlists[0]}" \
                 -analyzeduration 10000000 -probesize 10000000 -select_streams v \
                 -show_entries stream=id,codec_name,width,height -of json "bluray:$device"
             probe_metadata=$inspection_output
-            jq -e '.streams | type == "array" and length > 0' <<<"$probe_metadata" >/dev/null || {
+            jq -se 'length == 1 and (.[0].streams | type == "array" and length > 0)' \
+                <<<"$probe_metadata" >/dev/null || {
                 echo 'FFprobe did not return video streams for the 3D playlist.' >&2
                 exit 1
             }
@@ -833,45 +1010,76 @@ if [[ $media_type == bluray ]]; then
         else
             mvc_streams=
         fi
-        stream_listing=$(jq -r --argjson probe "$probe_metadata" --argjson three_d "$is_3d" '
+        stream_listing=$(jq -r --slurpfile probes <(printf '%s\n' "$probe_metadata") \
+            --argjson three_d "$is_3d" '
+            def pid_key: ascii_downcase | sub("^0x0*"; "");
+            def valid_pid:
+                if type == "string" then
+                    test("\\A0x0{0,4}[0-9a-fA-F]{1,4}\\z") and
+                    (pid_key | test("\\A(?:[0-9a-f]{0,3}|1[0-9a-f]{3})\\z"))
+                else false end;
+            def valid_dimension:
+                if type == "number" then isfinite and . > 0 and . == floor else false end;
+            def known_dimensions:
+                (.width | valid_dimension) and (.height | valid_dimension);
+            $probes[0] as $probe |
             if (.titles | type) != "array" or (.titles | length) != 1 then
                 error("bluray_info must return exactly one title")
+            elif any($probe.streams[]; .id | valid_pid | not) then
+                error("FFprobe video stream does not contain a valid PID")
+            elif ($probe.streams | group_by(.id | pid_key) | any(.[]; length > 1)) then
+                error("FFprobe video stream metadata contains duplicate PIDs")
             else
+                INDEX($probe.streams[]; .id | pid_key) as $probe_by_pid |
                 .titles[0] |
-                (.video // [] | map(.stream | ascii_downcase)) as $known_video |
-                (["video", "audio", "subtitles"][] as $kind |
-                    .[$kind][]? |
-                    if (.stream | type) != "string" or
-                        (.stream | test("^0x[0-9a-fA-F]+$") | not) then
+                . as $title |
+                (["video", "audio", "subtitles"] |
+                    map(select($title[.] != null and ($title[.] | type) != "array")) |
+                    first) as $invalid_collection |
+                if $invalid_collection != null then
+                    error("bluray_info \($invalid_collection) stream collection must be an array")
+                else . end |
+                INDEX((.video // [])[] | .stream | strings; pid_key) as $known_video |
+                [(["video", "audio", "subtitles"][] as $kind |
+                    (.[$kind] // [])[] |
+                    if (.stream | valid_pid | not) then
                         error("bluray_info stream does not contain a valid PID")
                     else
                         . as $record |
-                        ([$probe.streams[] | select((.id | ascii_downcase) == ($record.stream | ascii_downcase))][0]) as $video |
+                        $probe_by_pid[$record.stream | pid_key] as $video |
                         [.stream, $kind, (.codec // .["codec name"] // ""),
                          (.language // ""), (.format // "")] +
                         (if $three_d then
                             [if $kind != "video" then ""
                              elif $video == null then "Video role/dimensions unverified"
-                             elif ($video.width // 0) == 0 or ($video.height // 0) == 0 then
+                             elif ($video | known_dimensions | not) then
                                  "Dimensions unknown - MKV muxing unsupported"
                              else "\($video.width)x\($video.height) - video listed by disc metadata; not proof of full 3D"
                              end]
-                         else [] end) | @tsv
+                         else [] end)
                     end),
                 (if $three_d then
                     $probe.streams[] | .id as $pid |
-                    if (.id | type) != "string" or (.id | test("^0x[0-9a-fA-F]+$") | not) then
-                        error("FFprobe video stream does not contain a valid PID")
-                    elif ($known_video | index($pid | ascii_downcase)) != null then empty
+                    if ($known_video | has($pid | pid_key)) then empty
                     else
                         [.id, "video", (.codec_name // ""), "", "",
-                         (if (.width // 0) == 0 or (.height // 0) == 0 then
+                         (if (known_dimensions | not) then
                              "Additional video - possible MVC-dependent view; dimensions unknown; MKV muxing unsupported"
                           else "Additional video - role unverified; \(.width)x\(.height)"
-                          end)] | @tsv
+                          end)]
                     end
-                 else empty end)
+                 else empty end)] as $rows |
+                if ($rows | group_by(.[0] | pid_key) | any(.[]; length > 1)) then
+                    error("Blu-ray stream metadata contains duplicate PIDs")
+                else $rows[] |
+                    map(if type == "string" then gsub("[\u0000-\u001f\u007f-\u009f\u2028\u2029]+"; " ") else . end) |
+                    @tsv
+                end
             end' <<<"$stream_metadata")
+        if [[ -z $stream_listing ]]; then
+            echo 'No streams found in the selected Blu-ray playlist.' >&2
+            exit 1
+        fi
         if [[ $is_3d == true ]]; then
             printf '# warning\t%s\n' "$warning_3d"
             if [[ -n $mvc_streams ]]; then
@@ -883,12 +1091,7 @@ if [[ $media_type == bluray ]]; then
         else
             printf 'PID\tTYPE\tCODEC\tLANG\tFORMAT\n'
         fi
-        if [[ -n $stream_listing ]]; then
-            printf '%s\n' "$stream_listing"
-        else
-            echo 'No streams found in the selected Blu-ray playlist.' >&2
-            exit 1
-        fi
+        printf '%s\n' "$stream_listing"
         exit 0
     fi
     if [[ $list_playlists == true ]]; then
@@ -906,28 +1109,55 @@ if [[ $media_type == bluray ]]; then
             exit 1
         fi
         capture_inspection bluray_info "$device" "${keydb_args[@]}" --minutes "$minlength" --json
-        playlist_listing=$(jq -r --arg warning "$warning_3d" \
-            'if (.titles | type) != "array" then
+        playlist_listing=$(jq -sr --arg warning "$warning_3d" \
+            'def valid_playlist_id:
+                (type == "number" or type == "string") and (tostring | test("\\A[0-9]{1,5}\\z"));
+            def display_text:
+                if type == "string" then
+                    gsub("[\u000b\u000c\u001c-\u001e\u0085\u2028\u2029]"; " ")
+                else . end;
+            def valid_chapter_count:
+                if type == "number" then isfinite and . >= 0 and . == floor
+                elif type == "string" then test("\\A[0-9]+\\z")
+                else false end;
+            def reported_duration:
+                .playlist as $playlist |
+                (if .length != null then .length
+                 elif .duration != null then .duration
+                 else "unknown" end) |
+                if type == "string" or type == "number" then display_text
+                else error("bluray_info playlist \($playlist) duration must be a string or number")
+                end;
+            if length != 1 or (.[0] | type) != "object" then
+                error("bluray_info must return exactly one metadata object")
+            else .[0] end |
+            if (.titles | type) != "array" then
                 error("bluray_info JSON does not contain a titles array")
+            elif any(.titles[]; .playlist | valid_playlist_id | not) then
+                error("bluray_info title does not contain a valid playlist ID")
             else
+                (.titles | to_entries | group_by(.value.playlist | tonumber) |
+                    map(if (map(.value | del(.playlist)) | unique | length) == 1 then min_by(.key)
+                        else error("bluray_info metadata contains conflicting records for playlist \(.[0].value.playlist)")
+                        end) |
+                    sort_by(.key) | map(.value)) as $titles |
                 ([.bluray["disc name"], .bluray["udf title"]] |
                     map(select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)) |
                     .[0] // "") as $name |
-                (if $name != "" then "# disc-name\t" + ($name | gsub("[\u0000-\u001f\u007f]"; " ")) else empty end),
+                (if $name != "" then "# disc-name\t" + ($name | display_text | gsub("[\u0000-\u001f\u007f]"; " ")) else empty end),
                 (if .bluray["3D content"] == true then "# warning\t" + $warning else empty end),
                 (["main playlist", "longest playlist"][] as $kind |
                     .bluray[$kind] |
-                    if type == "number" or type == "string" then
+                    if . == null then empty
+                    elif valid_playlist_id then
                         "# " + ($kind | gsub(" "; "-")) + "\t" + tostring
-                    else empty end),
-                (.titles[] |
-                if (.playlist | type) != "number" and (.playlist | type) != "string" then
-                    error("bluray_info title does not contain a playlist ID")
-                else
+                    else error("bluray_info \($kind) is not a valid playlist ID")
+                    end),
+                ($titles[] |
                     [
                         (.playlist | tostring),
-                        (.length // .duration // "unknown"),
-                        (if (.chapter_count | type) == "number" or (.chapter_count | type) == "string" then
+                        reported_duration,
+                        (if (.chapter_count | valid_chapter_count) then
                             .chapter_count
                         elif (.chapters | type) == "array" then
                             (.chapters | length)
@@ -935,14 +1165,14 @@ if [[ $media_type == bluray ]]; then
                             "unknown"
                         end)
                     ] | @tsv
-                end
                 )
             end' <<<"$inspection_output")
         playlist_listing=$(LC_ALL=C tr -d '\000-\010\013\014\016-\037' <<<"$playlist_listing")
         printf 'playlist\treported_duration\tchapters\n'
         if [[ -n $playlist_listing ]]; then
             printf '%s\n' "$playlist_listing"
-        else
+        fi
+        if ! [[ $playlist_listing =~ (^|$'\n')[0-9]{1,5}$'\t' ]]; then
             printf 'No playlists found.\n' >&2
         fi
         exit 0
@@ -1000,11 +1230,27 @@ if [[ $media_type == bluray ]]; then
     if [[ -n $output_file && -n $output_name ]]; then
         echo 'Warning: --output-name is ignored when an explicit output file is given.' >&2
     fi
+    if ! command -v bluray_copy >/dev/null; then
+        echo 'Copying Blu-ray playlists requires bluray_copy.' >&2
+        exit 1
+    fi
+    if ! command -v ffprobe >/dev/null; then
+        echo 'Validating Blu-ray copies requires ffprobe.' >&2
+        exit 1
+    fi
+    if ! command -v bluray_info >/dev/null || ! command -v "$python_command" >/dev/null; then
+        echo 'Importing Blu-ray chapters requires bluray_info and python3.' >&2
+        exit 1
+    fi
+    if ! command -v setsid >/dev/null; then
+        echo 'Safe cancellation of Blu-ray copy commands requires setsid.' >&2
+        exit 1
+    fi
     for playlist in "${selected_playlists[@]}"; do
         format=$output_format
         if [[ $format == auto ]]; then
-            if ! command -v bluray_info >/dev/null || ! command -v jq >/dev/null; then
-                echo 'Automatic output format requires bluray_info and jq.' >&2
+            if ! command -v jq >/dev/null; then
+                echo 'Automatic output format requires jq.' >&2
                 exit 1
             fi
             capture_inspection bluray_info "$device" "${keydb_args[@]}" --playlist "$playlist" --all --json
@@ -1038,7 +1284,7 @@ if [[ $media_type == bluray ]]; then
             fi
         fi
         playlist_formats[$playlist]=$format
-        if [[ -v "playlist_names[$playlist]" && ${playlist_names[$playlist]} != *."$format" ]]; then
+        if [[ -v "playlist_names[$playlist]" && ${playlist_names[$playlist],,} != *."$format" ]]; then
             echo "Playlist $playlist output format changed; expected a .$format filename." >&2
             exit 2
         fi
@@ -1059,6 +1305,7 @@ if [[ $media_type == bluray ]]; then
             exit 2
         fi
     done
+    pin_output_directory "$output_directory"
     declare -A seen_output_paths=()
     for playlist in "${selected_playlists[@]}"; do
         IFS= read -r -d '' playlist_output < <(playlist_output_path "$playlist")
@@ -1068,36 +1315,33 @@ if [[ $media_type == bluray ]]; then
         fi
         seen_output_paths[$playlist_output]=1
         validate_output_filename "$playlist_output"
-        if [[ ${playlist_formats[$playlist]} == m2ts ]]; then
-            validate_output_filename "$playlist_output.chapters.txt"
-        fi
-        if [[ -e $playlist_output || -L $playlist_output ]]; then
+        pinned_output=$workspace_parent/${playlist_output##*/}
+        if [[ -e $pinned_output || -L $pinned_output ]]; then
             echo "Refusing to overwrite existing file: $playlist_output" >&2
             exit 1
         fi
-        if [[ ${playlist_formats[$playlist]} == m2ts && (-e $playlist_output.chapters.txt || -L $playlist_output.chapters.txt) ]]; then
-            echo "Refusing to overwrite existing file: $playlist_output.chapters.txt" >&2
-            exit 1
+        if [[ ${playlist_formats[$playlist]} == m2ts ]]; then
+            check_m2ts_sidecar "$pinned_output" "$playlist_output"
+            # Inspect only borderline names here so an invalid sidecar cannot
+            # stop the batch after earlier copies have already been published.
+            if ! validate_output_filename "$playlist_output.chapters.txt" true; then
+                capture_inspection bluray_info "$device" "${keydb_args[@]}" --playlist "$playlist" --chapters --json
+                chapter_count=$(
+                    PYTHONPATH="$python_module_path" "$python_command" -P -c '
+import json
+import sys
+from dvdvideo.bluray_chapters import export_chapters
+
+print(export_chapters(json.load(sys.stdin), sys.argv[1])[2])
+' "$playlist" <<<"$inspection_output")
+                if (( chapter_count > 0 )); then
+                    validate_output_filename "$playlist_output.chapters.txt"
+                fi
+            fi
         fi
     done
-    if ! command -v bluray_copy >/dev/null; then
-        echo 'Copying Blu-ray playlists requires bluray_copy.' >&2
-        exit 1
-    fi
     if [[ " ${playlist_formats[*]} " == *" mkv "* ]] && ! command -v ffmpeg >/dev/null; then
         echo 'Copying Blu-ray playlists to MKV requires ffmpeg.' >&2
-        exit 1
-    fi
-    if ! command -v ffprobe >/dev/null; then
-        echo 'Validating Blu-ray copies requires ffprobe.' >&2
-        exit 1
-    fi
-    if ! command -v bluray_info >/dev/null || ! command -v "$python_command" >/dev/null; then
-        echo 'Importing Blu-ray chapters requires bluray_info and python3.' >&2
-        exit 1
-    fi
-    if ! command -v setsid >/dev/null; then
-        echo 'Safe cancellation of Blu-ray copy commands requires setsid.' >&2
         exit 1
     fi
     for playlist in "${selected_playlists[@]}"; do
@@ -1134,11 +1378,15 @@ if [[ $media_type == bluray ]]; then
             PYTHONPATH="$python_module_path" \
                 "$python_command" -P -m dvdvideo.bluray_chapters "$playlist" "$chapter_metadata" "$chapter_sidecar" \
                     --size-file "$copy_size_file" "${language_validation_args[@]}" <"$playlist_metadata")
+        if [[ ${playlist_formats[$playlist]} == m2ts && $chapter_count -gt 0 ]]; then
+            validate_output_filename "$playlist_output.chapters.txt"
+        fi
         expected_copy_bytes=$(<"$copy_size_file")
         echo "Playlist $playlist: imported $chapter_count chapter marker(s)." >&2
         attempt=0
         while true; do
             attempt=$((attempt + 1))
+            inspection_timed_out=false
             rm -f "$temporary_copy" "$temporary_output"
             PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.output_space \
                 "$workspace_parent" --format "${playlist_formats[$playlist]}" --size-file "$copy_size_file"
@@ -1154,7 +1402,7 @@ if [[ $media_type == bluray ]]; then
                     temporary_output=$temporary_copy
                     copy_valid=true
                 elif run_inspection ffprobe -v error -show_entries stream=id,codec_type -of json "$temporary_copy" \
-                    > "$stream_metadata_file"; then
+                    >| "$stream_metadata_file"; then
                     if ! PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.bluray_chapters \
                         language-args "$playlist" "$playlist_metadata" "$language_args_file" \
                         "${language_pid_args[@]}" < "$stream_metadata_file"; then
@@ -1175,6 +1423,9 @@ if [[ $media_type == bluray ]]; then
             fi
             if (( attempt > retries )); then
                 echo "Failed to produce a valid copy of playlist $playlist after $attempt attempt(s)." >&2
+                if [[ $inspection_timed_out == true ]]; then
+                    exit 124
+                fi
                 exit 1
             fi
             echo "Retrying playlist $playlist (attempt $((attempt + 1)) of $((retries + 1)))..." >&2
@@ -1182,12 +1433,9 @@ if [[ $media_type == bluray ]]; then
         temporary_copy=
         if [[ ${playlist_formats[$playlist]} == m2ts && $chapter_count -gt 0 ]]; then
             publish_output "$playlist_output" "$chapter_sidecar"
-            echo "Chapters: $playlist_output.chapters.txt (playlist-relative markers; player support varies)" >&2
         else
-            publish_output "$playlist_output"
+            publish_output "$playlist_output" "" "${playlist_formats[$playlist]}"
         fi
-        completed_playlists=$((completed_playlists + 1))
-        printf 'Copied: %s\n' "$playlist_output"
     done
     exit 0
 fi
@@ -1209,8 +1457,13 @@ if [[ $input == -* ]]; then
     input=./$input
 fi
 if [[ -d $input ]]; then
-    IFS= read -r -d '' dvd_folder < <(basename -z -- "$input")
-    if [[ ${dvd_folder^^} != VIDEO_TS ]]; then
+    IFS= read -r -d '' input < <(normalize_directory_path "$input")
+    dvd_folder=${input##*/}
+    if [[ $dvd_folder != [Vv][Ii][Dd][Ee][Oo]_[Tt][Ss] ]]; then
+        set +f
+        unset GLOBIGNORE
+        shopt -u failglob nocaseglob
+        shopt -s nullglob
         dvd_folders=()
         for candidate in "$input"/[Vv][Ii][Dd][Ee][Oo]_[Tt][Ss]; do
             if [[ -d $candidate ]]; then
@@ -1277,21 +1530,26 @@ if ! [[ $title_or_playlist =~ ^[1-9][0-9]?$ ]]; then
     exit 2
 fi
 
-if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-    echo 'DVD inspection and copying require ffmpeg and ffprobe.' >&2
+if ! command -v ffprobe >/dev/null; then
+    echo 'DVD inspection and copy validation require ffprobe.' >&2
     exit 1
 fi
 
-if [[ $list_streams == true || $disc_details == true ]]; then
+if [[ $list_streams == false && $disc_details == false ]]; then
+    if ! command -v "$python_command" >/dev/null; then
+        echo 'Checking DVD copy space requires python3.' >&2
+        exit 1
+    fi
+    if ! command -v setsid >/dev/null; then
+        echo 'Safe cancellation of DVD copy commands requires setsid.' >&2
+        exit 1
+    fi
+    require_commands ffmpeg grep
     capture_inspection ffmpeg -hide_banner -demuxers
-    ffmpeg_demuxers=$inspection_output
-else
-    ffmpeg_demuxers=$(run_inspection ffmpeg -hide_banner -demuxers)
-fi
-require_commands grep
-if ! grep -q ' dvdvideo ' <<<"$ffmpeg_demuxers"; then
-    echo 'ffmpeg must provide the dvdvideo input format; libdvdnav alone is not sufficient.' >&2
-    exit 1
+    if ! grep -q ' dvdvideo ' <<<"$inspection_output"; then
+        echo 'ffmpeg must provide the dvdvideo input format; libdvdnav alone is not sufficient.' >&2
+        exit 1
+    fi
 fi
 
 input_args=(-f dvdvideo -title "$title_or_playlist" -i "$input")
@@ -1304,10 +1562,6 @@ inspect_dvd_title() {
         validate_disc_details DVD || return
     fi
     if [[ $list_streams == true ]]; then
-        if ! command -v "$python_command" >/dev/null; then
-            echo 'DVD stream listing requires python3.' >&2
-            return 1
-        fi
         stream_listing=$(
             PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.cli_output \
                 <<<"$inspection_output"
@@ -1338,11 +1592,14 @@ probe_dvd_inspection() {
         echo 'DVD title discovery failed; choose a title explicitly.' >&2
         return "$discovery_status"
     }
-    if ! alternative=$(jq -er '
-        [.track[] | select((.ix | type) == "number" and
+    if ! alternative=$(jq -ser '
+        if length != 1 or (.[0] | type) != "object" or (.[0].track | type) != "array" then
+            error("lsdvd must return one discovery object with a track array")
+        else .[0] end |
+        [.track[] | objects | select((.ix | type) == "number" and
             .ix >= 2 and .ix <= 99 and .ix == (.ix | floor) and
             (.length | type) == "number" and .length > 0)] |
-        max_by(.length) | .ix' <<<"$inspection_output"); then
+        max_by(.length) | .ix | numbers | floor' <<<"$inspection_output"); then
         echo 'Could not find an alternative DVD title with lsdvd; choose a title explicitly.' >&2
         return "$probe_status"
     fi
@@ -1356,6 +1613,7 @@ if [[ $disc_details == true ]]; then
         echo 'DVD details require jq.' >&2
         exit 1
     fi
+    require_commands "$python_command"
     probe_dvd_inspection \
         -show_entries 'format=format_long_name,duration,nb_streams:stream=index,codec_type,codec_name,profile,width,height,display_aspect_ratio,avg_frame_rate,channels,channel_layout,sample_rate:stream_tags=language,title:chapter=start_time,end_time' \
         -of json
@@ -1364,13 +1622,23 @@ if [[ $disc_details == true ]]; then
 fi
 
 if [[ $list_streams == true ]]; then
+    if ! command -v "$python_command" >/dev/null; then
+        echo 'DVD stream listing requires python3.' >&2
+        exit 1
+    fi
+    if [[ $list_streams_tsv == false ]]; then
+        require_commands awk
+    fi
+    if ! PYTHONPATH="$python_module_path" "$python_command" -B -P -c 'import dvdvideo.cli_output' </dev/null; then
+        echo 'DVD stream listing requires the dvdvideo.cli_output Python module.' >&2
+        exit 1
+    fi
     probe_dvd_inspection \
         -show_entries stream=index,codec_type,codec_name,profile,channels,channel_layout:stream_tags=language,title \
-        -of default=noprint_wrappers=0
+        -of json
     if [[ $list_streams_tsv == true ]]; then
         printf '%s\n' "$stream_listing"
     else
-        require_commands awk
         formatted_listing=$(printf '%s\n' "$stream_listing" | awk -F '\t' '
             BEGIN { OFS = "\t" }
             {
@@ -1381,10 +1649,22 @@ if [[ $list_streams == true ]]; then
             }
         ')
         if command -v column >/dev/null; then
-            printf '%s\n' "$formatted_listing" | column -t -s $'\t'
-        else
-            printf '%s\n' "$formatted_listing"
+            column_locale=${LC_ALL:-${LC_CTYPE:-${LANG:-C}}}
+            column_charmap=$(locale charmap 2>/dev/null) || column_charmap=
+            if [[ $column_charmap != UTF-8 ]]; then
+                column_locale=C.UTF-8
+                column_charmap=$(LC_ALL="$column_locale" locale charmap 2>/dev/null) || column_charmap=
+            fi
+            if [[ $column_charmap != UTF-8 ]]; then
+                printf 'Warning: no UTF-8 locale available for column; showing the tab-separated stream table.\n' >&2
+            elif aligned_listing=$(LC_ALL="$column_locale" column -t -s $'\t' <<<"$formatted_listing"); then
+                printf '%s\n' "$aligned_listing"
+                exit 0
+            else
+                printf 'Warning: column failed; showing the tab-separated stream table.\n' >&2
+            fi
         fi
+        printf '%s\n' "$formatted_listing"
     fi
     exit 0
 fi
@@ -1399,6 +1679,7 @@ if ! [[ -d $output_directory ]]; then
     echo "Output directory does not exist: $output_directory" >&2
     exit 2
 fi
+pin_output_directory "$output_directory"
 validate_output_filename "$output"
 
 map_args=()
@@ -1411,17 +1692,10 @@ if [[ ${#map_args[@]} -eq 0 ]]; then
 fi
 
 make_temporary_workspace "$output_directory"
-if ! command -v "$python_command" >/dev/null; then
-    echo 'Checking DVD copy space requires python3.' >&2
-    exit 1
-fi
-if ! command -v setsid >/dev/null; then
-    echo 'Safe cancellation of DVD copy commands requires setsid.' >&2
-    exit 1
-fi
 attempt=0
 while true; do
     attempt=$((attempt + 1))
+    inspection_timed_out=false
     rm -f "$temporary_output"
     PYTHONPATH="$python_module_path" "$python_command" -P -m dvdvideo.output_space \
         "$workspace_parent" --source "$input"
@@ -1432,6 +1706,9 @@ while true; do
     fi
     if (( attempt > retries )); then
         echo "Failed to produce a valid copy of title $title_or_playlist after $attempt attempt(s)." >&2
+        if [[ $inspection_timed_out == true ]]; then
+            exit 124
+        fi
         exit 1
     fi
     echo "Retrying title $title_or_playlist (attempt $((attempt + 1)) of $((retries + 1)))..." >&2

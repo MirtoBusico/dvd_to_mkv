@@ -22,11 +22,13 @@ import stat
 import subprocess
 from collections.abc import Callable
 
+from dvdvideo.gui_commands import validate_dvd_title
 from dvdvideo.gui_support import ManagedProcess
 
 
 def preview_command(
     source: str, *, is_bluray: bool, playlist: str | None, operation: ManagedProcess,
+    dvd_title: str = "1",
 ) -> list[str]:
     operation.check_cancelled()
     if not source:
@@ -73,7 +75,7 @@ def preview_command(
         assert playlist is not None
         command += ["-playlist", str(int(playlist)), "-i", "bluray:" + path]
     else:
-        command += ["-f", "dvdvideo", "-title", "1", "-i", path]
+        command += ["-f", "dvdvideo", "-title", validate_dvd_title(dvd_title), "-i", path]
     return command
 
 

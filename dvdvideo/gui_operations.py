@@ -34,6 +34,7 @@ from dvdvideo.gui_support import (
     copy_command_arguments,
     validate_output_paths,
 )
+from dvdvideo.gui_translation import identity
 from dvdvideo.preview import play_preview
 from dvdvideo.verify_copy import run_verification as verify_copy
 
@@ -70,6 +71,12 @@ class OperationRequest:
     listing_parser: Callable[[str], Listing] | None = None
     restored_source_settings: bool = False
     known_device_source: bool = False
+    summary_only: bool = False
+    dvd_title: str = "1"
+    timeout: float | None = None
+    quiet_stdout: bool = False
+    language: str = "en"
+    output_argument_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,7 @@ class OperationHooks:
     copy_started: Callable[[], None]
     output_changed: Callable[[str], None]
     confirm_non_device: Callable[[str], None] = lambda _source: None
+    translate: Callable[[str], str] = identity
 
 
 @dataclass
@@ -159,9 +167,11 @@ def execute_operation(
                 "playlists": list(spec.playlists),
                 "formats": dict(spec.formats),
             }
+            if request.summary_only:
+                output_payload.update(summarize=True, script=request.script_path, language=request.language)
         preflight = run_operation_preflight(
             request.source, request.is_bluray, output_payload,
-            request.preview, request.preview_playlist, operation, hooks.log,
+            request.preview, request.preview_playlist, operation, hooks.log, request.dvd_title,
         )
         if preflight is not None and preflight.source_is_block_device:
             hooks.exclude_device(request.source)
@@ -203,13 +213,21 @@ def execute_operation(
             output_path = preflight.output_path
             directory_output = preflight.directory_output
             if output_path != spec.path:
-                command = list(request.command[:-1]) + [output_path]
-                hooks.output_changed(output_path)
+                output_index = request.output_argument_index
+                if output_index is None or not 0 <= output_index < len(command) or command[output_index] != spec.path:
+                    raise RuntimeError("Copy command is missing valid output argument metadata.")
+                command[output_index] = output_path
+                if not request.summary_only:
+                    hooks.output_changed(output_path)
             if preflight.output_error is not None:
                 hooks.log(f"Cannot validate output filename: {preflight.output_error}")
                 return OperationResult("Failed")
+            if request.summary_only:
+                if preflight.copy_summary is None:
+                    raise RuntimeError("Copy preflight did not return a summary")
+                return OperationResult("Completed", preflight.copy_summary, deliver_success=True)
             if spec.is_bluray and spec.name and directory_output:
-                command = command[:-2] + ["--output-name", spec.name] + command[-2:]
+                command[1:1] = ["--output-name", spec.name]
             hooks.copy_started()
         if request.output is None:
             hooks.log("$ " + " ".join(command))
@@ -230,21 +248,29 @@ def execute_operation(
                 )
         else:
             result = operation.run(
-                command, collect=request.collect, log=hooks.queue_log, abandon_unresponsive=True,
+                command, collect=request.collect, log=None if request.quiet_stdout else hooks.queue_log,
+                stderr_log=hooks.queue_log if request.quiet_stdout else None,
+                timeout=request.timeout, abandon_unresponsive=True,
             )
         output = result.stdout
         listing = None
+        if request.quiet_stdout and result.returncode:
+            hooks.log("DVD title discovery failed; title 1 remains available.")
         if result.returncode == 0:
             if details_requested:
                 playlist = command[command.index("--playlist") + 1] if "--playlist" in command else None
                 try:
                     output = parse_disc_details(
-                        output, is_bluray=request.is_bluray, playlist=playlist,
-                    ).text()
+                        output, is_bluray=request.is_bluray, playlist=playlist, dvd_title=request.dvd_title,
+                        translate=hooks.translate,
+                    ).text(hooks.translate)
                 except ValueError as error:
                     raise RuntimeError(f"Could not read disc details: {error}") from error
             elif request.listing_parser is not None:
-                listing = request.listing_parser(output)
+                try:
+                    listing = request.listing_parser(output)
+                except (TypeError, ValueError) as error:
+                    raise RuntimeError(f"Could not read inspection output: {error}") from error
         hooks.log(f"Exit status: {result.returncode}")
         return OperationResult(
             "Completed" if result.returncode == 0 else "Failed", output, listing,

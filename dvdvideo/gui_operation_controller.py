@@ -17,21 +17,25 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from dvdvideo.gui_commands import (
     CommandInput,
+    CommandPlan,
     PlaylistChoice,
     build_bluray_streams_command,
-    build_command,
     build_disc_details_command,
+    prepare_command,
 )
 from dvdvideo.gui_listing import (
     Listing,
     parse_bluray_streams,
     parse_dvd_streams,
+    parse_dvd_titles,
     parse_playlists,
 )
 from dvdvideo.gui_operations import (
@@ -46,6 +50,7 @@ from dvdvideo.gui_operations import (
 from dvdvideo.gui_preferences import SourcePreferences
 from dvdvideo.gui_selection import SelectionCoordinator
 from dvdvideo.gui_support import ManagedProcess
+from dvdvideo.gui_translation import identity
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,8 @@ class OperationInputs:
     output_name: str
     minimum_minutes: int
     selected: tuple[str, ...]
+    dvd_title: str = "1"
+    language: str = "en"
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,7 @@ class ListingHooks:
     load_rows: Callable[[str | Listing], None]
     load_stream_rows: Callable[[str, str | Listing, list[str] | None], None]
     update_stream_format: Callable[[str], None]
+    load_dvd_titles: Callable[[Listing], None] = lambda _listing: None
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,7 @@ class DialogHooks:
     show_disc_details: Callable[[str, str], None]
     present_m2ts_confirmation: Callable[[str], None]
     present_verification_dialog: Callable[[str, bool, str, list[str], int], None]
+    present_copy_summary: Callable[[str, Callable[[bool], None]], None]
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,8 @@ class OperationUiHooks:
     set_status: Callable[[str], None]
     invalidate_choosers: Callable[[], None]
     set_output_path: Callable[[str], None]
+    notify_completion: Callable[[str, str], None]
+    translate: Callable[[str], str] = identity
 
 
 @dataclass(frozen=True)
@@ -118,10 +129,13 @@ class OperationController:
         self.lifecycle = lifecycle
         self.selection = selection
         self.hooks = hooks
+        self.pending_copy: object | None = None
 
     def selected_for_copy(self, inputs: OperationInputs | None = None) -> list[str]:
         inputs = inputs or self.hooks.get_inputs()
         previous = inputs.preferences
+        if not inputs.is_bluray and previous is not None and previous.dvd_title != inputs.dvd_title:
+            previous = None
         return self.selection.selection_state.selected_ids(
             previous,
             is_bluray=inputs.is_bluray,
@@ -145,6 +159,10 @@ class OperationController:
         return requested
 
     def command(self, inspect: bool = False) -> list[str] | None:
+        plan = self.prepare_command(inspect)
+        return list(plan.arguments) if plan is not None else None
+
+    def prepare_command(self, inspect: bool = False) -> CommandPlan | None:
         inputs = self.hooks.get_inputs()
         source = inputs.source
         if not source:
@@ -179,24 +197,46 @@ class OperationController:
             ),
             selected=selected,
             playlists=tuple(playlists),
+            dvd_title=inputs.dvd_title,
         )
         try:
-            return build_command(request)
+            return prepare_command(request)
         except ValueError as error:
             self.hooks.runtime.log(str(error))
             return None
 
-    def output_snapshot(self, command: list[str]) -> OutputSpec:
+    def output_snapshot(self) -> OutputSpec:
         inputs = self.hooks.get_inputs()
         selected = self.selected_for_copy(inputs)
         is_bluray = inputs.is_bluray
+        formats = {playlist: self.playlist_format(playlist, inputs) for playlist in selected} if is_bluray else {}
         return OutputSpec(
-            command[-1],
+            inputs.output_path or ("." if is_bluray else ""),
             is_bluray,
             inputs.output_name.strip(),
             tuple(selected),
-            tuple((playlist, self.playlist_format(playlist, inputs)) for playlist in selected)
-            if is_bluray else (),
+            tuple(formats.items()),
+        )
+
+    def discover_dvd_titles(self) -> None:
+        inputs = self.hooks.get_inputs()
+        if self.lifecycle.running or inputs.detecting or self.lifecycle.closing:
+            self.hooks.runtime.log("Wait for the current operation before discovering DVD titles.")
+            return
+        if inputs.is_bluray or not inputs.source:
+            self.hooks.runtime.log("Choose a DVD source before discovering titles.")
+            return
+        tool = shutil.which("lsdvd")
+        if tool is None:
+            self.hooks.runtime.log("DVD title discovery requires lsdvd; title 1 remains available.")
+            return
+        source = os.path.abspath(inputs.source)
+        if os.path.basename(os.path.normpath(source)).upper() == "VIDEO_TS":
+            source = os.path.dirname(os.path.normpath(source))
+        self.start(
+            [tool, "-Oj", "-acs", source], on_listing=self.hooks.listing.load_dvd_titles,
+            listing_parser=lambda output: parse_dvd_titles(output, translate=self.hooks.ui.translate),
+            timeout=60, quiet_stdout=True,
         )
 
     def inspect(self) -> None:
@@ -211,7 +251,11 @@ class OperationController:
                 self.hooks.listing.clear_rows()
             finally:
                 self.selection.requires_reinspection = requires_reinspection
-            parser = parse_playlists if inputs.is_bluray else parse_dvd_streams
+            def parser(output: str) -> Listing:
+                if inputs.is_bluray:
+                    return parse_playlists(output, translate=self.hooks.ui.translate)
+                return parse_dvd_streams(output)
+
             self.start(command, on_listing=self.hooks.listing.load_rows, listing_parser=parser)
 
     def preview_selected(self) -> None:
@@ -255,7 +299,7 @@ class OperationController:
                 return
             playlist = selected[0] if selected else None
         command = build_disc_details_command(
-            inputs.script_path, source, is_bluray=is_bluray, playlist=playlist,
+            inputs.script_path, source, is_bluray=is_bluray, playlist=playlist, dvd_title=inputs.dvd_title,
         )
         self.start(
             command, lambda output: self.hooks.dialogs.show_disc_details(output, source),
@@ -299,9 +343,78 @@ class OperationController:
                         self.hooks.dialogs.present_m2ts_confirmation(playlist)
                         return
                     self.selection.m2ts_confirmed.add(playlist)
-        command = self.command()
-        if command:
-            self.start(command, output_snapshot=self.output_snapshot(command))
+        plan = self.prepare_command()
+        if plan is not None:
+            command = list(plan.arguments)
+            try:
+                output = self.output_snapshot()
+            except ValueError as error:
+                self.hooks.runtime.log(str(error))
+                return
+            generation = inputs.generation
+            tracks = self.copy_tracks_summary(inputs)
+            token = object()
+            self.pending_copy = token
+
+            def response(accepted: bool) -> None:
+                if self.pending_copy is not token:
+                    self.hooks.runtime.log("Ignored an outdated copy confirmation.")
+                    return
+                self.pending_copy = None
+                if not accepted:
+                    self.hooks.runtime.log("Copy cancelled before extraction; selections were kept.")
+                    return
+                current = self.hooks.get_inputs()
+                if (
+                    self.lifecycle.running or self.lifecycle.closing or current.detecting
+                    or current.generation != generation or current.source != inputs.source
+                    or current.is_bluray != inputs.is_bluray or self.selection.requires_reinspection
+                    or current.output_format != inputs.output_format
+                    or self.command() != command or self.output_snapshot() != output
+                    or self.copy_tracks_summary(current) != tracks
+                ):
+                    self.hooks.runtime.log("Copy not started because the source, settings, or operation changed. Review the summary again.")
+                    return
+                self.start(command, output_snapshot=output, output_argument_index=plan.output_index)
+
+            def present(summary: str) -> None:
+                self.hooks.ui.set_status("Awaiting copy confirmation")
+                self.hooks.dialogs.present_copy_summary(summary + "\n\n" + tracks, response)
+
+            self.start(
+                command, on_success=present, output_snapshot=output, summary_only=True,
+                output_argument_index=plan.output_index,
+            )
+
+    def copy_tracks_summary(self, inputs: OperationInputs) -> str:
+        translate = self.hooks.ui.translate
+        lines = [translate("Selected tracks")]
+        playlists = self.selected_for_copy(inputs) if inputs.is_bluray else [""]
+        for playlist in playlists:
+            if inputs.is_bluray:
+                lines.append(translate("Playlist {playlist}:").format(playlist=playlist))
+                if self.playlist_format(playlist, inputs) == "m2ts":
+                    lines.append("  " + translate("All tracks (original M2TS; filtering is not applied)."))
+                    continue
+                identifiers = (
+                    self.streams_for_copy(playlist, inputs)
+                    if playlist in self.selection.playlist_streams else None
+                )
+                tracks = self.selection.playlist_track_info.get(playlist, [])
+            else:
+                identifiers = self.selected_for_copy(inputs)
+                tracks = self.selection.dvd_track_info
+            if identifiers is None:
+                lines.append("  " + translate("All source tracks (not individually inspected)."))
+                continue
+            by_id = {track.identifier: track for track in tracks}
+            for identifier in identifiers:
+                track = by_id.get(identifier)
+                detail = (
+                    f" - {track.kind}, {track.language or translate('language unspecified')}" if track else ""
+                )
+                lines.append(f"  {identifier}{detail}")
+        return "\n".join(lines)
 
     def confirm_m2ts_response(self, playlist: str, generation: int, accepted: bool) -> None:
         inputs = self.hooks.get_inputs()
@@ -362,7 +475,7 @@ class OperationController:
             return
         is_bluray = inputs.is_bluray
         selected = self.selected_for_copy(inputs)
-        title = selected[0] if is_bluray and len(selected) == 1 else "1" if not is_bluray else ""
+        title = selected[0] if is_bluray and len(selected) == 1 else inputs.dvd_title if not is_bluray else ""
         streams = (
             self.streams_for_copy(title, inputs)
             if is_bluray and title in self.selection.playlist_streams
@@ -418,6 +531,10 @@ class OperationController:
         verification: VerificationSpec | None = None,
         listing_parser: Callable[[str], Listing] | None = None,
         on_listing: Callable[[Listing], None] | None = None,
+        summary_only: bool = False,
+        timeout: float | None = None,
+        quiet_stdout: bool = False,
+        output_argument_index: int | None = None,
     ) -> None:
         inputs = self.hooks.get_inputs()
         if self.lifecycle.closing:
@@ -429,6 +546,10 @@ class OperationController:
             self.hooks.runtime.log("An operation is already running.")
             return
         operation = self.lifecycle.begin()
+        notification_kind = (
+            "Verification" if verification is not None else
+            "Copy" if output_snapshot is not None and not summary_only else None
+        )
         self.hooks.runtime.cancel_drive_scan()
         self.hooks.ui.invalidate_choosers()
         generation = inputs.generation
@@ -436,6 +557,7 @@ class OperationController:
         is_bluray = inputs.is_bluray
         self.hooks.ui.set_busy(True)
         self.hooks.ui.set_status(
+            "Preparing copy summary..." if summary_only else
             "Verifying copy..." if verification else "Preparing preview..." if preview else
             "Validating output..." if output_snapshot else "Inspecting..." if on_success or on_listing else "Copying..."
         )
@@ -459,6 +581,12 @@ class OperationController:
                 )
             ),
             known_device_source=self.hooks.runtime.is_known_device_source(source),
+            summary_only=summary_only,
+            dvd_title=inputs.dvd_title,
+            timeout=timeout,
+            quiet_stdout=quiet_stdout,
+            language=inputs.language,
+            output_argument_index=output_argument_index,
         )
 
         def dispatch(action: Callable[[], object]) -> None:
@@ -478,6 +606,7 @@ class OperationController:
             preview_started=lambda: dispatch(lambda: self.show_preview_status(operation)),
             copy_started=lambda: dispatch(lambda: self.show_copying_status(operation)),
             output_changed=lambda path: dispatch(lambda: self.update_output_path(operation, path)),
+            translate=self.hooks.ui.translate,
         )
 
         def worker() -> None:
@@ -493,12 +622,13 @@ class OperationController:
                     is_bluray,
                     result.status,
                     result.listing,
-                    output_snapshot is not None,
+                    output_snapshot is not None and not summary_only,
                     on_listing=on_listing if result.deliver_success else None,
+                    notification_kind=notification_kind,
                 ))
 
         if not self.hooks.runtime.start_worker(worker):
-            self.finish_run(status="Failed")
+            self.finish_run(status="Failed", notification_kind=notification_kind)
 
     def show_copying_status(self, operation: ManagedProcess) -> None:
         if (
@@ -533,6 +663,7 @@ class OperationController:
         completed_copy: bool = False,
         *,
         on_listing: Callable[[Listing], None] | None = None,
+        notification_kind: str | None = None,
     ) -> None:
         inputs = self.hooks.get_inputs()
         if self.lifecycle.operation is not None and self.lifecycle.operation.cancelled.is_set():
@@ -555,6 +686,8 @@ class OperationController:
         ):
             self.hooks.runtime.log("Ignored stale operation results because the source or media mode changed.")
             return
+        if notification_kind is not None and status in ("Completed", "Verified", "Failed"):
+            self.hooks.ui.notify_completion(notification_kind, status)
         if status == "Verified":
             self.hooks.runtime.log(output.rstrip())
         if on_listing is not None and listing is not None:

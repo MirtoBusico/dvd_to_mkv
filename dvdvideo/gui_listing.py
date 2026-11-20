@@ -15,8 +15,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import json
+import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import cast
 
 from dvdvideo.gui_preferences import (
     MAX_STREAM_PID,
@@ -24,12 +28,14 @@ from dvdvideo.gui_preferences import (
     TrackInfo,
     normalize_stream_pid,
 )
+from dvdvideo.gui_translation import identity
 
 MAX_INSPECTION_ROWS = 2000
 MAX_STREAM_ROWS = 512
 PLAYLIST_ID = re.compile(r"[0-9]{1,5}")
 DVD_STREAM_INDEX = re.compile(r"[0-9]{1,4}")
 STREAM_KINDS = frozenset({"video", "audio", "subtitle", "data", "attachment"})
+PLAYLIST_DURATION = re.compile(r"([0-9]{1,6}):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]{1,3}))?")
 
 
 @dataclass
@@ -45,10 +51,12 @@ class Listing:
     omitted_ids: set[str] = field(default_factory=set[str])
 
 
-def parse_playlists(output: str) -> Listing:
+def parse_playlists(output: str, *, translate: Callable[[str], str] = identity) -> Listing:
     listing = Listing()
     seen: set[str] = set()
     hints: dict[str, list[str]] = {}
+    durations: dict[str, int] = {}
+    seen_duration_ids: set[str] = set()
     for line in output.splitlines():
         fields = line.split("\t")
         if (
@@ -59,6 +67,28 @@ def parse_playlists(output: str) -> Listing:
             label = "main feature candidate" if fields[0] == "# main-playlist" else "longest candidate"
             if label not in labels:
                 labels.append(label)
+        elif len(fields) == 3 and PLAYLIST_ID.fullmatch(fields[0]):
+            duration = PLAYLIST_DURATION.fullmatch(fields[1].strip())
+            identifier = str(int(fields[0]))
+            if identifier in seen_duration_ids:
+                continue
+            if len(seen_duration_ids) >= MAX_INSPECTION_ROWS:
+                continue
+            seen_duration_ids.add(identifier)
+            if duration:
+                hours, minutes, seconds, fraction = duration.groups()
+                milliseconds = (
+                    (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
+                    + int((fraction or "").ljust(3, "0"))
+                )
+                if milliseconds:
+                    durations[identifier] = milliseconds
+    if len(durations) > 1:
+        longest = max(durations.values())
+        if longest > 0:
+            for identifier, duration in durations.items():
+                if duration == longest and "longest candidate" not in hints.get(identifier, []):
+                    hints.setdefault(identifier, []).append("longest listed duration")
     for line in output.splitlines():
         if not line.strip() or line.lower() in (
             "playlist\tduration\tchapters", "playlist\treported_duration\tchapters",
@@ -85,13 +115,70 @@ def parse_playlists(output: str) -> Listing:
                 listing.omitted_ids.add(playlist)
                 continue
             duration, chapters = fields[1:]
-            playlist_hints = hints.get(playlist, [])
+            playlist_hints = [translate(label) for label in hints.get(playlist, [])]
+            if durations.get(playlist, 0) >= 40 * 60 * 1000:
+                playlist_hints.append(translate("40+ minutes"))
             hint = f"    ({', '.join(playlist_hints)})" if playlist_hints else ""
             listing.rows.append((
-                playlist, f"Playlist {playlist}    {duration}    {chapters} chapters{hint}"
+                playlist, translate("Playlist {id}    {duration}    {chapters} chapters").format(
+                    id=playlist, duration=duration, chapters=chapters,
+                ) + hint,
             ))
         else:
             listing.invalid += 1
+    return listing
+
+
+def parse_dvd_titles(output: str, *, translate: Callable[[str], str] = identity) -> Listing:
+    """Parse lsdvd's JSON without treating a long title as a confirmed feature."""
+    data: object = json.loads(output)
+    if not isinstance(data, dict):
+        raise TypeError("DVD title discovery did not return a title list.")
+    titles = cast(dict[str, object], data).get("track")
+    if not isinstance(titles, list):
+        raise TypeError("DVD title discovery did not return a title list.")
+    records: list[tuple[str, float, int, int, int]] = []
+    seen: set[int] = set()
+    for item in cast(list[object], titles):
+        if not isinstance(item, dict):
+            raise TypeError("DVD title discovery returned an invalid title.")
+        record = cast(dict[str, object], item)
+        number, duration = record.get("ix"), record.get("length")
+        if (
+            not isinstance(number, int) or isinstance(number, bool) or not 1 <= number <= 99
+            or number in seen or not isinstance(duration, (int, float))
+            or isinstance(duration, bool) or not math.isfinite(duration) or duration < 0
+        ):
+            raise ValueError("DVD title discovery returned an invalid title number or duration.")
+        counts: list[int] = []
+        for key in ("chapter", "audio", "subp"):
+            value = record.get(key)
+            if not isinstance(value, list):
+                raise TypeError(f"DVD title {number} is missing {key} information.")
+            counts.append(len(cast(list[object], value)))
+        seen.add(number)
+        records.append((str(number), float(duration), counts[0], counts[1], counts[2]))
+    if not records:
+        raise ValueError("DVD title discovery found no titles.")
+    longest = max(record[1] for record in records)
+    listing = Listing()
+    for number, duration, chapters, audio, subtitles in records:
+        seconds = int(duration)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        hints: list[str] = []
+        if duration >= 40 * 60:
+            hints.append(translate("40+ minutes"))
+        if len(records) > 1 and duration == longest and duration > 0:
+            hints.append(translate("longest listed duration"))
+        suffix = f" ({', '.join(hints)})" if hints else ""
+        listing.rows.append((
+            number,
+            translate("Title {id}    {duration}    {chapters} chapters, {audio} audio, {subtitles} subtitles").format(
+                id=number, duration=f"{hours:02}:{minutes:02}:{seconds:02}",
+                chapters=chapters, audio=audio, subtitles=subtitles,
+            ) + suffix,
+        ))
     return listing
 
 

@@ -290,6 +290,8 @@ def validate_output_paths(
                 "Filename must be at most 160 UTF-8 bytes, without path separators, "
                 "reserved characters, or leading/trailing dots."
             )
+        if name.lower().endswith((".mkv", ".m2ts")):
+            raise ValueError("Filename must be a stem without an .mkv or .m2ts extension.")
         paths = [
             os.path.join(output, (name if name and len(playlists) == 1
                                   else f"{name + '-' if name else ''}playlist-{pid}")

@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import re
 from dataclasses import dataclass
 
 
@@ -36,6 +37,19 @@ class CommandInput:
     output_format: str = "auto"
     selected: tuple[str, ...] = ()
     playlists: tuple[PlaylistChoice, ...] = ()
+    dvd_title: str = "1"
+
+
+@dataclass(frozen=True)
+class CommandPlan:
+    arguments: tuple[str, ...]
+    output_index: int | None = None
+
+
+def validate_dvd_title(title: str) -> str:
+    if re.fullmatch(r"[1-9][0-9]?", title) is None:
+        raise ValueError("DVD title must be between 1 and 99.")
+    return title
 
 
 def _source_argument(source: str) -> str:
@@ -53,6 +67,7 @@ def build_bluray_streams_command(script_path: str, source: str, playlist: str) -
 
 def build_disc_details_command(
     script_path: str, source: str, *, is_bluray: bool, playlist: str | None = None,
+    dvd_title: str = "1",
 ) -> list[str]:
     if not source:
         raise ValueError("Choose a source first.")
@@ -61,17 +76,17 @@ def build_disc_details_command(
         if playlist is not None:
             command += ["--playlist", playlist]
         return command + ["--disc-details"]
-    return [script_path, "--disc-details", "--", source]
+    return [script_path, "--disc-details", "--", source, validate_dvd_title(dvd_title)]
 
 
-def build_command(request: CommandInput) -> list[str]:
+def prepare_command(request: CommandInput) -> CommandPlan:
     if not request.source:
         raise ValueError("Choose a source first.")
     source = _source_argument(request.source)
     if request.is_bluray:
         command = [request.script_path, "--bluray", "--device", source]
         if request.inspect:
-            return command + ["--minlength", str(request.minimum_minutes), "--list-playlists"]
+            return CommandPlan(tuple(command + ["--minlength", str(request.minimum_minutes), "--list-playlists"]))
         if not request.playlists:
             raise ValueError("Select at least one playlist.")
         for playlist in request.playlists:
@@ -82,9 +97,12 @@ def build_command(request: CommandInput) -> list[str]:
                 raise ValueError(f"Select at least one stream for playlist {playlist.identifier}.")
             for stream in playlist.streams:
                 command += ["--stream-id", f"{playlist.identifier}:{stream}"]
-        return command + ["--output-format", request.output_format, "--", request.output or "."]
+        command += ["--output-format", request.output_format, "--"]
+        output_index = len(command)
+        return CommandPlan(tuple(command + [request.output or "."]), output_index)
     if request.inspect:
-        return [request.script_path, "--list-streams-tsv", "--", source]
+        title = validate_dvd_title(request.dvd_title)
+        return CommandPlan((request.script_path, "--list-streams-tsv", "--", source, title))
     if not request.selected:
         raise ValueError("Select at least one stream.")
     if not request.output:
@@ -92,4 +110,14 @@ def build_command(request: CommandInput) -> list[str]:
     command = [request.script_path]
     for identifier in request.selected:
         command += ["--stream", identifier]
-    return command + ["--", source, request.output]
+    command += ["--", source]
+    output_index = len(command)
+    command.append(request.output)
+    title = validate_dvd_title(request.dvd_title)
+    if title != "1":
+        command.append(title)
+    return CommandPlan(tuple(command), output_index)
+
+
+def build_command(request: CommandInput) -> list[str]:
+    return list(prepare_command(request).arguments)

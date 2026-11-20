@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import struct
 import threading
 import time
 import traceback
@@ -25,7 +26,7 @@ from dvdvideo.gui_preferences import (
 )
 from dvdvideo.gui_profile_dialog import ProfileDialog
 from dvdvideo.gui_widgets import Choice, ResponseWindow
-from dvdvideo.gui_dialogs import VerificationDialog, create_disc_details
+from dvdvideo.gui_dialogs import VerificationDialog, create_copy_summary, create_disc_details
 from dvdvideo.gui_view import WindowView
 from dvdvideo.gui_listing import Listing
 from dvdvideo.gui_listing_view import ListingView
@@ -47,7 +48,9 @@ from dvdvideo.gui_source_controller import (
     DriveUiHooks, SourceController, SourceControllerHooks, SourceRuntimeHooks, SourceUiHooks,
 )
 from dvdvideo.gui_source_workflow import SourceWorkflow
-from dvdvideo.gui_preferences_io import PreferencesWriter
+from dvdvideo.gui_preferences_io import PreferencesDurabilityError, PreferencesWriter
+from dvdvideo.gui_tooltips import TOOLTIPS
+from dvdvideo.gui_translation import identity, load_translation
 from dvdvideo.optical_drives import OpticalDrive
 
 SCRIPT_PATH: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dvd-to-mkv.sh")
@@ -87,8 +90,11 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         self.activity_buffer = ActivityBuffer()
         self.applying_stream_format: bool = False
         self.preferences_error: str | None = None
+        self.translate: Callable[[str], str] = identity
+        self.active_gui_language = "en"
         self.preferences_writer = PreferencesWriter(self.log)
         self.preferences: PreferencesStore | None = None
+        self.progress_timer: int | None = None
 
         self.follow_log = True
         self.view = WindowView(self)
@@ -98,6 +104,8 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             self.view.streams_label,
             self.on_selection_changed,
             self.on_stream_toggled,
+            translate=lambda message: self.translate(message),
+            on_visibility_changed=self.update_selection_visibility,
         )
         self.bind_workflows()
         self.set_child(self.view.root)
@@ -123,9 +131,18 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         except Exception:  # noqa: BLE001 - report unexpected failures at the worker boundary
             store = None
             error = "Unexpected preferences loader error:\n" + traceback.format_exc().rstrip()
-        GLib.idle_add(self.finish_preferences_load, store, error)
+        translator = None
+        translation_error = None
+        try:
+            translator = load_translation(store.gui_language if store else "system").gettext
+        except (OSError, EOFError, ValueError, struct.error) as exception:
+            translation_error = f"Could not load GUI translations: {exception}"
+        GLib.idle_add(self.finish_preferences_load, store, error, translator, translation_error)
 
-    def finish_preferences_load(self, store: PreferencesStore | None, error: str | None) -> bool:
+    def finish_preferences_load(
+        self, store: PreferencesStore | None, error: str | None,
+        translator: Callable[[str], str] | None = None, translation_error: str | None = None,
+    ) -> bool:
         if not self.preferences_loading or self.lifecycle.closing:
             return False
         self.preferences_loading = False
@@ -139,16 +156,24 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         self.preferences_error = error
         self.selection.restoring_preferences = True
         try:
+            if translation_error:
+                self.log(translation_error)
+            if translator is not None:
+                self.translate = translator
+                self.active_gui_language = store.gui_language if store else "system"
+                self.view.translate(self.translate)
             self.populate_profile_choice(self.view.profile_combo)
+            self.view.gui_language_combo.set_active_id(store.gui_language if store else "system")
         finally:
             self.selection.restoring_preferences = False
         self.view.profile_combo.set_sensitive(store is not None)
+        self.view.gui_language_combo.set_sensitive(store is not None)
         self.view.root.set_sensitive(True)
         if error:
             self.log(error)
-            self.view.status_label.set_text("Preferences unavailable")
+            self.view.status_label.set_text(self.translate("Preferences unavailable"))
         else:
-            self.view.status_label.set_text("Ready")
+            self.view.status_label.set_text(self.translate("Ready"))
         GLib.idle_add(self.scan_drives)
         return False
 
@@ -167,9 +192,13 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                    "to use the application without saving settings for this session."),
             wrap=True, max_width_chars=60, xalign=0,
         ))
-        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
-        dialog.add_button("Continue Without Preferences", Gtk.ResponseType.REJECT)
-        dialog.add_button("Wait", Gtk.ResponseType.APPLY, default=True)
+        dialog.add_button("Close", Gtk.ResponseType.CLOSE, tooltip=self.translate(TOOLTIPS["close_loading"]))
+        dialog.add_button(
+            "Continue Without Preferences", Gtk.ResponseType.REJECT, tooltip=self.translate(TOOLTIPS["skip_loading"]),
+        )
+        dialog.add_button(
+            "Wait", Gtk.ResponseType.APPLY, tooltip=self.translate(TOOLTIPS["wait_loading"]), default=True,
+        )
         dialog.connect("response", self.on_preferences_load_response)
         dialog.present()
         return False
@@ -214,6 +243,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                         clear_playlists=False, notify_empty=False,
                     ),
                     update_stream_format=lambda playlist: self.update_stream_format(playlist),
+                    reset_visibility=lambda: self.listing_view.set_show_unselected(False),
                 ),
                 log=lambda message: self.log(message),
             ),
@@ -228,23 +258,29 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                     load_rows=self.load_rows,
                     load_stream_rows=self.load_stream_rows,
                     update_stream_format=self.update_stream_format,
+                    load_dvd_titles=self.load_dvd_titles,
                 ),
                 dialogs=DialogHooks(
                     show_disc_details=self.show_disc_details,
                     present_m2ts_confirmation=lambda playlist: self.confirm_m2ts(playlist),
                     present_verification_dialog=self.present_verification_dialog,
+                    present_copy_summary=lambda text, respond: create_copy_summary(
+                        self, text, respond, translate=self.translate,
+                    ).present(),
                 ),
                 ui=OperationUiHooks(
                     log_inspect_action=self.log_inspect_action,
                     set_busy=self.set_busy,
-                    set_status=self.view.status_label.set_text,
+                    set_status=self.set_status,
                     invalidate_choosers=self.invalidate_choosers,
                     set_output_path=self.view.output_entry.set_text,
+                    notify_completion=self.notify_completion,
+                    translate=lambda message: self.translate(message),
                 ),
                 runtime=OperationRuntimeHooks(
                     cancel_drive_scan=self.source_workflow.cancel_drive_scan,
                     start_worker=self.start_worker,
-                    dispatch_ui=lambda action: GLib.idle_add(action),
+                    dispatch_ui=self.dispatch_ui,
                     queue_log=self.queue_log,
                     log=self.log,
                     exclude_device_source=self.exclude_device_source,
@@ -261,11 +297,12 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                 clear_rows=self.clear_rows,
                 suggest_name=self.suggest_name,
                 log=self.log,
-                set_status=self.view.status_label.set_text,
+                set_status=self.set_status,
                 save=self.save_current_source_preferences,
                 streams_changed=self.on_stream_toggled,
                 update_stream_format=self.update_stream_format,
                 clean_label=clean_label,
+                translate=lambda message: self.translate(message),
             ),
         )
         self.source_controller = SourceController(
@@ -276,10 +313,11 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                     set_source=lambda source: self.view.source_entry.set_text(source),
                     invalidate_choosers=lambda: self.invalidate_choosers(),
                     prepare_source=lambda source: self.prepare_source_change(source),
-                    set_status=lambda status: self.view.status_label.set_text(status),
+                    set_status=self.set_status,
                     apply_detected_media=lambda media: self.apply_detected_media(media),
                     exclude_device=self.apply_device_exclusion,
                     confirm_non_device=self.apply_non_device_confirmation,
+                    update_title_sensitivity=self.update_title_sensitivity,
                 ),
                 drives=DriveUiHooks(
                     render_drives=lambda drives, scanning, error: self.render_drives(
@@ -328,13 +366,19 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             output_name=self.view.name_entry.get_text(),
             minimum_minutes=self.view.minimum_spin.get_value_as_int(),
             selected=tuple(self.listing_view.active_ids()),
+            dvd_title=self.selection.dvd_title,
+            language=self.active_gui_language,
         )
 
     def listing_context(self) -> ListingContext:
         store = self.preferences
+        settings = self.selection.source_preferences(store, self.view.source_entry.get_text())
+        if settings is not None and settings.dvd_title != self.selection.dvd_title:
+            from dataclasses import replace
+            settings = replace(settings, dvd_streams=[], dvd_inspected=False)
         return ListingContext(
             is_bluray=self.view.bluray_button.get_active(),
-            settings=self.selection.source_preferences(store, self.view.source_entry.get_text()),
+            settings=settings,
             profile=store.get_profile(self.view.profile_combo.get_active_id()) if store is not None else None,
         )
 
@@ -395,6 +439,26 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             self.log(f"Select All Tracks included {count} tracks hidden by the display limit.")
         self.set_rows_active(streams=True)
 
+    def toggle_unselected(self, *_args: object) -> None:
+        if self.lifecycle.running or self.lifecycle.closing:
+            return
+        self.listing_view.set_show_unselected(not self.listing_view.show_unselected)
+
+    def update_selection_visibility(self) -> None:
+        listing = self.listing_view
+        self.view.show_unselected_button.set_label(self.translate(
+            "Hide unselected" if listing.show_unselected else "Show unselected"
+        ))
+        self.view.show_unselected_button.set_tooltip_text(self.translate(
+            TOOLTIPS["hide_unselected" if listing.show_unselected else "show_unselected"]
+        ))
+        self.view.items_empty_label.set_visible(
+            bool(listing.rows) and not listing.show_unselected and not listing.active_ids()
+        )
+        self.view.tracks_empty_label.set_visible(
+            bool(listing.stream_rows) and not listing.show_unselected and not listing.active_ids(streams=True)
+        )
+
     def clear_hidden_selections(
         self, *_args: Any, clear_playlists: bool = True, notify_empty: bool = True,
     ) -> bool:
@@ -427,15 +491,20 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         self.preference_workflow.populate_profiles()
 
     def populate_profile_choice(self, combo: Choice) -> None:
-        combo.remove_all()
-        if self.preferences is None:
-            combo.append(DEFAULT_PROFILE_NAME, DEFAULT_PROFILE_NAME)
-            combo.set_active_id(DEFAULT_PROFILE_NAME)
-            combo.set_sensitive(False)
-            return
-        for name in self.preferences.profile_names:
-            combo.append(name, name)
-        combo.set_active_id(self.preferences.active_profile)
+        restoring = self.selection.restoring_preferences
+        self.selection.restoring_preferences = True
+        try:
+            combo.remove_all()
+            if self.preferences is None:
+                combo.append(DEFAULT_PROFILE_NAME, DEFAULT_PROFILE_NAME)
+                combo.set_active_id(DEFAULT_PROFILE_NAME)
+                combo.set_sensitive(False)
+                return
+            for name in self.preferences.profile_names:
+                combo.append(name, name)
+            combo.set_active_id(self.preferences.active_profile)
+        finally:
+            self.selection.restoring_preferences = restoring
 
     def show_profile_dialog(self, *_args: Any) -> None:
         self.preference_workflow.show_profile_dialog()
@@ -449,6 +518,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         dialog = ProfileDialog(
             self, store, on_changed, current_profile=current_profile,
             get_current_profile=self.view.profile_combo.get_active_id,
+            translate=self.translate,
         )
         dialog.present()
 
@@ -459,6 +529,28 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
 
     def on_profile_changed(self, *_args: Any) -> None:
         self.preference_workflow.profile_changed()
+
+    def on_gui_language_changed(self, *_args: object) -> None:
+        store = self.preferences
+        if self.selection.restoring_preferences or store is None:
+            return
+        language = self.view.gui_language_combo.get_active_id()
+        if language is None:
+            self.log("Could not save GUI language: no language selected.")
+            return
+        if language == store.gui_language:
+            return
+        try:
+            store.set_gui_language(language)
+        except PreferencesDurabilityError as error:
+            self.log(str(error))
+        except (OSError, ValueError) as error:
+            self.log(f"Could not save GUI language: {error}")
+            self.selection.restoring_preferences = True
+            try:
+                self.view.gui_language_combo.set_active_id(store.gui_language)
+            finally:
+                self.selection.restoring_preferences = False
 
     def apply_profile_to_rows(self, apply_settings: bool = True) -> bool:
         return self.preference_workflow.apply_profile_to_rows(apply_settings)
@@ -472,6 +564,8 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
 
     def restore_source_preferences(self, source: str) -> None:
         self.preference_workflow.restore_source_preferences(source)
+        saved = self.selection.source_preferences(self.preferences, source)
+        self.set_dvd_title_choices([], saved.dvd_title if saved is not None else "1")
 
     def save_current_source_preferences(self) -> None:
         self.preference_workflow.save_current_source_preferences()
@@ -487,7 +581,12 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                         break
             self.save_current_source_preferences()
 
+    def set_status(self, status: str) -> None:
+        self.view.status_label.set_text(self.translate(status))
+
     def on_status_changed(self, label: Gtk.Label, _param: Any) -> None:
+        if self.lifecycle.running:
+            self.view.progress_bar.set_text(label.get_text())
         if hasattr(label, "announce"):
             label.announce(label.get_text(), Gtk.AccessibleAnnouncementPriority.MEDIUM)
 
@@ -513,21 +612,23 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         while (child := self.view.drives_box.get_first_child()) is not None:
             self.view.drives_box.remove(child)
         self.view.drives_button.set_label(
-            "Drives (cancelling...)" if cancelling else
-            "Drives (scanning...)" if scanning else "Drives"
+            self.translate("Drives (cancelling...)") if cancelling else
+            self.translate("Drives (scanning...)") if scanning else self.translate("Drives")
         )
         if scanning or error or not drives:
             self.view.drives_box.append(Gtk.Label(
-                label="Cancelling drive scan..." if cancelling else
-                "Scanning drives..." if scanning else
-                "Scan failed; see Activity" if error else "No optical drives found",
+                label=self.translate("Cancelling drive scan...") if cancelling else
+                self.translate("Scanning drives...") if scanning else
+                self.translate("Scan failed; see Activity") if error else self.translate("No optical drives found"),
             ))
         for drive in drives:
             button = Gtk.Button(label=clean_label(f"{drive.path} - {drive.name}: {drive.status}"))
+            button.set_tooltip_text(self.translate(TOOLTIPS["select_drive"]))
             button.set_sensitive(drive.media is not None)
             button.connect("clicked", self.select_drive, drive)
             self.view.drives_box.append(button)
-        refresh = Gtk.Button(label="Refresh drives")
+        refresh = Gtk.Button(label=self.translate("Refresh drives"))
+        refresh.set_tooltip_text(self.translate(TOOLTIPS["refresh_drives"]))
         refresh.set_sensitive(not scanning)
         refresh.connect("clicked", self.scan_drives)
         self.view.drives_box.append(refresh)
@@ -552,7 +653,10 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         self.view.select_all_streams_button.set_visible(is_bluray)
         self.view.name_row.set_visible(is_bluray)
         self.view.format_box.set_visible(is_bluray)
-        self.view.output_entry.set_placeholder_text("Choose output directory" if is_bluray else "Choose output MKV")
+        self.view.dvd_title_row.set_visible(not is_bluray)
+        self.view.output_entry.set_placeholder_text(
+            self.translate("Choose output directory" if is_bluray else "Choose output MKV")
+        )
         requires_reinspection = self.selection.requires_reinspection
         self.clear_rows()
         if self.source_workflow.applying_detection:
@@ -564,7 +668,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
     def on_manual_mode(self, *_args: Any) -> None:
         if not self.source_workflow.applying_detection:
             self.cancel_detection()
-            self.view.status_label.set_text("Media mode selected manually")
+            self.set_status("Media mode selected manually")
 
     def on_source_changed(self, *_args: Any) -> None:
         self.source_controller.source_changed(self.view.source_entry.get_text())
@@ -619,9 +723,12 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         if should_clear:
             self.clear_rows()
             self.log("Saved disc selections were cleared; inspect the current disc again.")
+        if restored is not None and restored.source == source and restored.has_saved_settings:
+            self.set_dvd_title_choices([], "1")
 
     def clear_device_selections(self) -> None:
         self.clear_rows()
+        self.set_dvd_title_choices([], "1")
         self.selection.reinspection_edits = None
         self.log("Drive refresh cleared disc selections; inspect the current disc again.")
 
@@ -671,7 +778,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             self.choose_native_path(title, action, entry)
 
     def choose_modern_path(self, title: str, action: str, entry: Gtk.Entry) -> None:
-        dialog = Gtk.FileDialog(title=title)
+        dialog = Gtk.FileDialog(title=self.translate(title))
         path = entry.get_text()
         if path:
             location = Gio.File.new_for_path(os.path.abspath(path))
@@ -682,7 +789,10 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                 dialog.set_initial_folder(location)
             else:
                 dialog.set_initial_file(location)
-        operations = {
+        operations: dict[str, tuple[
+            Callable[[Gtk.Window, Gio.Cancellable | None, Callable[[Gtk.FileDialog, Gio.AsyncResult], None]], None],
+            Callable[[Gio.AsyncResult], Gio.File],
+        ]] = {
             "open": (dialog.open, dialog.open_finish),
             "save": (dialog.save, dialog.save_finish),
             "select_folder": (dialog.select_folder, dialog.select_folder_finish),
@@ -711,7 +821,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             "select_folder": Gtk.FileChooserAction.SELECT_FOLDER,
         }
         dialog: Gtk.FileChooserNative = Gtk.FileChooserNative.new(
-            title, self, actions[action], "_Select", "_Cancel"
+            self.translate(title), self, actions[action], self.translate("_Select"), self.translate("_Cancel")
         )
         path = entry.get_text()
         if path:
@@ -780,6 +890,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         self.selection.restored_source = None
         self.selection.reinspection_edits = None
         self.clear_rows()
+        self.set_dvd_title_choices([], "1")
         self.view.output_entry.set_text("")
         self.mode_outputs = {False: "", True: ""}
         self.view.name_entry.set_text("")
@@ -794,7 +905,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             reason = "the save failed" if pending.confirmed_non_device else "the source was not identified"
             self.log(f"Source settings were not saved because {reason}.")
         self.follow_log = True
-        self.view.status_label.set_text("Choose a source")
+        self.set_status("Choose a source")
         self.view.source_entry.grab_focus()
 
     def on_format_changed(self, *_args: Any) -> None:
@@ -812,9 +923,9 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         all_streams: bool = self.operation_controller.playlist_format(playlist) == "m2ts"
         self.view.select_all_streams_button.set_sensitive(not all_streams and not self.lifecycle.running)
         label = (
-            f"Playlist {playlist}: original M2TS preserves ALL streams (filtering disabled)"
-            if all_streams else f"Streams for playlist {playlist} — MKV"
-        )
+            self.translate("Playlist {playlist}: original M2TS preserves ALL streams (filtering disabled)")
+            if all_streams else self.translate("Streams for playlist {playlist} — MKV")
+        ).format(playlist=playlist)
         self.applying_stream_format = True
         try:
             self.listing_view.update_stream_format(
@@ -870,6 +981,57 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
     def inspect(self, *_args: Any) -> None:
         self.operation_controller.inspect()
 
+    def discover_dvd_titles(self, *_args: Any) -> None:
+        self.operation_controller.discover_dvd_titles()
+
+    def set_dvd_title_choices(self, rows: list[tuple[str, str]], title: str) -> None:
+        combo = self.view.dvd_title_combo
+        combo.handler_block_by_func(self.on_dvd_title_changed)
+        try:
+            combo.remove_all()
+            identifiers = {identifier for identifier, _label in rows}
+            if "1" not in identifiers:
+                combo.append("1", self.translate("Title 1 (default)"))
+            for identifier, label in rows:
+                combo.append(identifier, clean_label(label))
+            if title not in identifiers and title != "1":
+                combo.append(title, self.translate("Title {title} (previously selected)").format(title=title))
+            combo.set_active_id(title)
+            self.selection.dvd_title = title
+        finally:
+            combo.handler_unblock_by_func(self.on_dvd_title_changed)
+
+    def load_dvd_titles(self, listing: Listing) -> None:
+        title = self.selection.dvd_title
+        self.set_dvd_title_choices(listing.rows, title)
+        self.log(
+            f"Found {len(listing.rows)} DVD titles. Duration and track counts are hints; "
+            "select a different title to inspect its streams automatically."
+        )
+        if title not in {identifier for identifier, _label in listing.rows}:
+            self.log(f"Selected title {title} was not listed; choose a listed title or inspect it manually.")
+
+    def on_dvd_title_changed(self, *_args: Any) -> None:
+        title = self.view.dvd_title_combo.get_active_id()
+        if title is None or title == self.selection.dvd_title:
+            return
+        if self.lifecycle.running or self.lifecycle.closing or self.source_workflow.detecting:
+            combo = self.view.dvd_title_combo
+            combo.handler_block_by_func(self.on_dvd_title_changed)
+            try:
+                combo.set_active_id(self.selection.dvd_title)
+            finally:
+                combo.handler_unblock_by_func(self.on_dvd_title_changed)
+            self.log("Wait for the current operation before selecting a DVD title.")
+            return
+        self.source_workflow.source_generation += 1
+        self.invalidate_choosers()
+        self.clear_rows()
+        self.selection.change_dvd_title(title)
+        self.save_current_source_preferences()
+        self.log(f"DVD title {title} selected; inspecting its streams.")
+        self.inspect()
+
     def preview_selected(self, *_args: Any) -> None:
         self.operation_controller.preview_selected()
 
@@ -879,7 +1041,9 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
     def show_disc_details(self, text: str, source: str) -> None:
         if self.details_window is not None:
             self.details_window.destroy()
-        dialog = create_disc_details(self, clean_label(source), text, self.close_disc_details)
+        dialog = create_disc_details(
+            self, clean_label(source), text, self.close_disc_details, translate=self.translate,
+        )
         self.details_window = dialog
         dialog.present()
 
@@ -892,19 +1056,27 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         self.operation_controller.copy_selected()
 
     def confirm_m2ts(self, playlist: str) -> None:
-        dialog = ResponseWindow(title="Preserve all streams?", transient_for=self)
+        dialog = ResponseWindow(title=self.translate("Preserve all streams?"), transient_for=self)
         content = dialog.get_content_area()
         content.set_margin_top(12)
         content.set_margin_start(12)
         content.set_margin_end(12)
         content.set_spacing(8)
-        content.append(Gtk.Label(label=f"Playlist {playlist}: preserve all streams as M2TS?", wrap=True, xalign=0))
         content.append(Gtk.Label(
-            label="Your filtered selection cannot be applied to original M2TS. Both video views and all audio/subtitles will be copied.",
+            label=self.translate("Playlist {playlist}: preserve all streams as M2TS?").format(playlist=playlist),
             wrap=True, xalign=0,
         ))
-        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        dialog.add_button("OK", Gtk.ResponseType.OK)
+        content.append(Gtk.Label(
+            label=self.translate(
+                "Your filtered selection cannot be applied to original M2TS. "
+                "Both video views and all audio/subtitles will be copied."
+            ),
+            wrap=True, xalign=0,
+        ))
+        dialog.add_button(
+            self.translate("Cancel"), Gtk.ResponseType.CANCEL, tooltip=self.translate(TOOLTIPS["keep_selection"]),
+        )
+        dialog.add_button(self.translate("OK"), Gtk.ResponseType.OK, tooltip=self.translate(TOOLTIPS["preserve_all"]))
         generation: int = self.source_workflow.source_generation
 
         def response(dialog: ResponseWindow, response: int) -> None:
@@ -936,6 +1108,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         dialog = VerificationDialog(
             self, bluray=bluray, title=title, streams=streams,
             choose_copy=lambda entry: self.choose_path("Choose existing copy", "open", entry),
+            translate=self.translate,
         )
 
         def response(dialog: VerificationDialog, result: int) -> None:
@@ -955,12 +1128,28 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         dialog.present()
 
     def set_busy(self, busy: bool) -> None:
+        if busy:
+            self.activity_buffer.start_progress()
+            self.view.progress_bar.set_text(self.view.status_label.get_text())
+            self.view.progress_bar.set_visible(True)
+            self.view.progress_bar.pulse()
+            if self.progress_timer is None:
+                self.progress_timer = GLib.timeout_add(100, self.pulse_progress)
+        else:
+            self.activity_buffer.stop_progress()
+            if self.progress_timer is not None:
+                GLib.source_remove(self.progress_timer)
+                self.progress_timer = None
+            self.view.progress_bar.set_fraction(0)
+            self.view.progress_bar.set_text("")
+            self.view.progress_bar.set_visible(False)
         for widget in (
             self.view.inspect_button, self.view.copy_button, self.view.inspect_streams_button,
             self.view.source_entry.get_parent(), self.view.output_entry.get_parent(),
             self.view.name_row, self.view.minlength_row, self.view.profile_row, self.view.list_box, self.view.stream_list_box,
+            self.view.dvd_title_row,
             self.view.dvd_button, self.view.bluray_button, self.view.select_all_items_button,
-            self.view.clear_hidden_button,
+            self.view.show_unselected_button,
             self.view.select_all_streams_button,
             self.view.format_box,
             self.view.details_button,
@@ -971,14 +1160,78 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
             if widget is not None:
                 widget.set_sensitive(not busy)
         self.view.cancel_button.set_sensitive(busy)
+        self.update_title_sensitivity()
         if self.selection.stream_playlist is not None:
             self.update_stream_format(self.selection.stream_playlist)
+
+    def update_title_sensitivity(self) -> None:
+        self.view.dvd_title_row.set_sensitive(
+            not self.source_workflow.detecting and not self.lifecycle.running and not self.lifecycle.closing
+        )
+
+    @staticmethod
+    def dispatch_ui(action: Callable[[], object]) -> int:
+        def once() -> bool:
+            action()
+            return False
+
+        return GLib.idle_add(once)
+
+    def pulse_progress(self) -> bool:
+        progress = self.activity_buffer.progress()
+        phase = self.view.status_label.get_text()
+        operation = self.lifecycle.operation
+        if progress is None or (operation is not None and operation.cancelled.is_set()):
+            self.view.progress_bar.set_text(
+                self.translate("{phase} (percentage and ETA unavailable)").format(phase=phase)
+            )
+            self.view.progress_bar.pulse()
+        else:
+            fraction, eta = progress
+            remaining = (
+                f"{eta // 3600:02}:{eta // 60 % 60:02}:{eta % 60:02}"
+                if eta is not None else self.translate("unavailable")
+            )
+            self.view.progress_bar.set_fraction(fraction)
+            self.view.progress_bar.set_text(
+                self.translate("{phase} {fraction:.0%} - phase ETA {remaining}").format(
+                    phase=phase, fraction=fraction, remaining=remaining,
+                )
+            )
+        return True
 
     def cancel_operation(self, *_args: Any) -> None:
         if self.lifecycle.operation is not None:
             self.lifecycle.operation.cancel()
             self.view.cancel_button.set_sensitive(False)
-            self.view.status_label.set_text("Cancelling...")
+            self.set_status("Cancelling...")
+
+    def notify_completion(self, kind: str, status: str) -> None:
+        if self.lifecycle.closing or self.is_active():
+            return
+        app = self.get_application()
+        if app is None:
+            self.log("Cannot send completion notification: the window has no application.")
+            return
+        failed = status == "Failed"
+        if kind == "Verification":
+            title = self.translate("Verification failed") if failed else self.translate("Verification completed")
+        else:
+            title = self.translate("Copy failed") if failed else self.translate("Copy completed")
+        notification = Gio.Notification.new(title)
+        notification.set_body(
+            self.translate("The operation could not be completed. Open Activity for details.")
+            if failed else
+            self.translate("The copy passed the requested verification checks. Open Activity for the report.")
+            if status == "Verified" else
+            self.translate("The selected copy operation completed. Open Activity for details.")
+        )
+        notification.set_icon(Gio.ThemedIcon.new("media-optical"))
+        notification.set_default_action("app.show-window")
+        try:
+            app.send_notification("operation-completion", notification)
+        except GLib.Error as error:
+            self.log(f"Could not send completion notification: {error.message}")
 
     def on_close_request(self, *_args: Any) -> bool:
         if self.lifecycle.closing:
@@ -987,23 +1240,33 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         unsaved = pending is not None and pending.save_pending
         if self.lifecycle.running or unsaved:
             if self.close_dialog is None:
-                self.close_dialog = ResponseWindow(title="Close DVD to MKV?", transient_for=self)
+                self.close_dialog = ResponseWindow(title=self.translate("Close DVD to MKV?"), transient_for=self)
                 content = self.close_dialog.get_content_area()
                 content.set_margin_top(12)
                 content.set_margin_start(12)
                 content.set_margin_end(12)
-                message = "Stop the current operation and close?" if self.lifecycle.running else "Close?"
+                message = (self.translate("Stop the current operation and close?")
+                           if self.lifecycle.running else self.translate("Close?"))
                 if pending is not None and pending.save_pending:
-                    reason = "the save failed" if pending.confirmed_non_device else "the source was not identified"
-                    message += (
-                        f"\nSource settings have not been saved because {reason}. "
-                        "Closing now will discard those changes."
+                    message += "\n" + (
+                        self.translate("Source settings could not be saved. Closing now will discard those changes.")
+                        if pending.confirmed_non_device else self.translate(
+                            "Source settings have not been saved because the source was not identified. "
+                            "Closing now will discard those changes."
+                        )
                     )
                 content.append(Gtk.Label(label=message, wrap=True, xalign=0))
-                self.close_dialog.add_button("No", Gtk.ResponseType.NO)
+                self.close_dialog.add_button(
+                    self.translate("No"), Gtk.ResponseType.NO, tooltip=self.translate(TOOLTIPS["stay_open"]),
+                )
                 if pending is not None and pending.save_pending and pending.confirmed_non_device:
-                    self.close_dialog.add_button("Retry Save", Gtk.ResponseType.APPLY)
-                self.close_dialog.add_button("Yes", Gtk.ResponseType.YES)
+                    self.close_dialog.add_button(
+                        self.translate("Retry Save"), Gtk.ResponseType.APPLY,
+                        tooltip=self.translate(TOOLTIPS["retry_save"]),
+                    )
+                self.close_dialog.add_button(
+                    self.translate("Yes"), Gtk.ResponseType.YES, tooltip=self.translate(TOOLTIPS["confirm_close"]),
+                )
                 self.close_dialog.connect("response", self.on_close_response)
                 self.close_dialog.present()
             return True
@@ -1054,23 +1317,30 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         if self.preferences_writer.busy and not self.discard_preferences_on_close:
             if (self.save_wait_dialog is None
                     and time.monotonic() - self.preferences_wait_started >= PREFERENCES_CLOSE_WAIT):
-                dialog = ResponseWindow(title="Preferences are still saving", transient_for=self)
+                dialog = ResponseWindow(title=self.translate("Preferences are still saving"), transient_for=self)
                 self.save_wait_dialog = dialog
                 content = dialog.get_content_area()
                 content.set_margin_top(12)
                 content.set_margin_start(12)
                 content.set_margin_end(12)
                 content.append(Gtk.Label(
-                    label=(
+                    label=self.translate(
                         "The preferences save is taking longer than expected. Closing anyway may lose "
                         "pending changes; the in-progress write may still complete after closing, and "
                         "its durability is not confirmed. A temporary file may remain."
                     ),
                     wrap=True, max_width_chars=60, xalign=0,
                 ))
-                dialog.add_button("Cancel Closing", Gtk.ResponseType.CANCEL)
-                dialog.add_button("Close Anyway", Gtk.ResponseType.REJECT)
-                dialog.add_button("Wait", Gtk.ResponseType.APPLY, default=True)
+                dialog.add_button(
+                    self.translate("Cancel Closing"), Gtk.ResponseType.CANCEL, tooltip=self.translate(TOOLTIPS["stay_open"]),
+                )
+                dialog.add_button(
+                    self.translate("Close Anyway"), Gtk.ResponseType.REJECT, tooltip=self.translate(TOOLTIPS["close_anyway"]),
+                )
+                dialog.add_button(
+                    self.translate("Wait"), Gtk.ResponseType.APPLY,
+                    tooltip=self.translate(TOOLTIPS["wait_saving"]), default=True,
+                )
                 dialog.connect("response", self.on_save_wait_response)
                 dialog.present()
             return True
@@ -1081,7 +1351,7 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
         if save_error and not self.discard_preferences_on_close:
             self.close_timer = None
             if self.save_error_dialog is None:
-                dialog = ResponseWindow(title="Preferences were not safely saved", transient_for=self)
+                dialog = ResponseWindow(title=self.translate("Preferences were not safely saved"), transient_for=self)
                 self.save_error_dialog = dialog
                 content = dialog.get_content_area()
                 content.set_margin_top(12)
@@ -1090,9 +1360,17 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
                 content.append(Gtk.Label(
                     label=clean_text(save_error), wrap=True, max_width_chars=60, xalign=0,
                 ))
-                dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-                dialog.add_button("Close Without Saving", Gtk.ResponseType.REJECT)
-                dialog.add_button("Retry", Gtk.ResponseType.APPLY, default=True)
+                dialog.add_button(
+                    self.translate("Cancel"), Gtk.ResponseType.CANCEL, tooltip=self.translate(TOOLTIPS["stay_open"]),
+                )
+                dialog.add_button(
+                    self.translate("Close Without Saving"), Gtk.ResponseType.REJECT,
+                    tooltip=self.translate(TOOLTIPS["discard_settings"]),
+                )
+                dialog.add_button(
+                    self.translate("Retry"), Gtk.ResponseType.APPLY,
+                    tooltip=self.translate(TOOLTIPS["retry_save"]), default=True,
+                )
                 dialog.connect("response", self.on_save_close_response)
                 dialog.present()
             return False
@@ -1107,7 +1385,8 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
     def cancel_close(self) -> None:
         self.lifecycle.closing = False
         self.set_sensitive(True)
-        self.view.status_label.set_text("Preferences not saved")
+        self.update_title_sensitivity()
+        self.set_status("Preferences not saved")
         if self.restart_drive_scan_on_cancel:
             self.scan_drives()
 
@@ -1173,8 +1452,12 @@ class DvdToMkvWindow(Gtk.ApplicationWindow):
 class DvdToMkvApplication(Gtk.Application):
     def __init__(self) -> None:
         super().__init__(application_id="org.local.dvd_to_mkv")
+        show_window = Gio.SimpleAction.new("show-window", None)
+        show_window.connect("activate", lambda *_args: self.activate())
+        self.add_action(show_window)
 
     def do_activate(self) -> None:
+        self.withdraw_notification("operation-completion")
         window = self.props.active_window
         if not isinstance(window, DvdToMkvWindow):
             window = DvdToMkvWindow(self)

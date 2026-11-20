@@ -37,6 +37,7 @@ from dvdvideo.gui_preferences_io import (
 
 DEFAULT_PROFILE_NAME = "Default"
 VALID_OUTPUT_FORMATS = frozenset({"auto", "mkv", "m2ts"})
+VALID_GUI_LANGUAGES = frozenset({"system", "en", "it_IT", "ro_RO"})
 LANGUAGE_CODE = re.compile(r"[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*")
 STREAM_PID = re.compile(r"0[xX]0{0,4}[0-9a-fA-F]{1,4}")
 MAX_STREAM_PID = 0x1FFF
@@ -77,6 +78,7 @@ class SourcePreferences:
     playlist_streams: dict[str, list[str]] = field(default_factory=_new_string_list_map)
     # Older records already contain explicit DVD selections, including empty ones.
     dvd_inspected: bool = True
+    dvd_title: str = "1"
 
 
 def _numeric_id(value: str) -> str:
@@ -186,7 +188,7 @@ def select_tracks(profile: Profile, tracks: list[TrackInfo]) -> list[str]:
 
 def _preferences_path() -> Path:
     config_home = os.environ.get("XDG_CONFIG_HOME")
-    candidate = Path(config_home).expanduser() if config_home else None
+    candidate = Path(config_home) if config_home else None
     root = candidate if candidate is not None and candidate.is_absolute() else Path.home() / ".config"
     return root / "dvd-to-mkv-gui" / "preferences.json"
 
@@ -210,6 +212,7 @@ class PreferencesStore:
             DEFAULT_PROFILE_NAME: Profile(),
         }
         self.active_profile = DEFAULT_PROFILE_NAME
+        self.gui_language = "system"
         self._sources: dict[str, SourcePreferences] = {}
         self.device_sources: set[str] = set()
         language_aliases()
@@ -315,6 +318,20 @@ class PreferencesStore:
             self.active_profile = previous
             raise
 
+    def set_gui_language(self, language: str) -> None:
+        language = _validated_string(language, "GUI language")
+        if language not in VALID_GUI_LANGUAGES:
+            raise ValueError(f"Unsupported GUI language: {language}")
+        previous = self.gui_language
+        self.gui_language = language
+        try:
+            self._write()
+        except PreferencesDurabilityError:
+            raise
+        except Exception:
+            self.gui_language = previous
+            raise
+
     def get_source(self, source: str) -> SourcePreferences | None:
         if not reusable_source(source) or self.source_key(source) in self.device_sources:
             return None
@@ -336,6 +353,8 @@ class PreferencesStore:
         _json_string_list(preferences.playlists, "playlists")
         _string_list_map({"playlist_streams": preferences.playlist_streams}, "playlist_streams")
         _optional_bool({"dvd_inspected": preferences.dvd_inspected}, "dvd_inspected", True)
+        if re.fullmatch(r"[1-9][0-9]?", preferences.dvd_title) is None:
+            raise ValueError("Invalid DVD title.")
         preferences = _normalize_source(preferences)
 
         key = self.source_key(source)
@@ -419,6 +438,10 @@ class PreferencesStore:
         if not isinstance(active, str):
             raise ValueError("active_profile must be a string")
         self.active_profile = active if active in loaded_profiles else DEFAULT_PROFILE_NAME
+        language = _optional_str(data_object, "gui_language", "system")
+        if language not in VALID_GUI_LANGUAGES:
+            raise ValueError("invalid GUI language")
+        self.gui_language = language
         for key, value in sources.items():
             source_data = _json_object(value)
             settings = SourcePreferences(
@@ -429,7 +452,10 @@ class PreferencesStore:
                 playlists=_string_list(source_data, "playlists"),
                 playlist_streams=_string_list_map(source_data, "playlist_streams"),
                 dvd_inspected=_optional_bool(source_data, "dvd_inspected", True),
+                dvd_title=_optional_str(source_data, "dvd_title", "1"),
             )
+            if re.fullmatch(r"[1-9][0-9]?", settings.dvd_title) is None:
+                raise ValueError(f"invalid DVD title for {key}")
             if settings.output_format not in VALID_OUTPUT_FORMATS or not 0 <= settings.minimum_minutes <= 600:
                 raise ValueError(f"invalid source settings for {key}")
             if settings.profile_name not in loaded_profiles:
@@ -438,6 +464,7 @@ class PreferencesStore:
 
     def _write(self) -> None:
         active_profile = self.active_profile
+        gui_language = self.gui_language
         profiles = tuple(self.profiles.values())
         # Stored records are replaced, never mutated or exposed to callers.
         sources = self._sources.copy()
@@ -446,6 +473,7 @@ class PreferencesStore:
             return {
                 "version": 1,
                 "active_profile": active_profile,
+                "gui_language": gui_language,
                 "profiles": [
                     {
                         "name": profile.name,

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import cast
 
 from dvdvideo import gui_support
+from dvdvideo.gui_preferences import normalize_stream_pid
 from dvdvideo.gui_support import ManagedProcess, OperationCancelled
 
 HASH_LINE = re.compile(r"^\s*(\d+),\s*(\d+),\s*([0-9a-f]{64})(?:,.*)?$")
@@ -201,6 +202,7 @@ def _verify(
             raise RuntimeError("Blu-ray stream IDs must be hexadecimal PIDs in the range 0x0000–0x1fff.")
         if len({int(stream, 16) for stream in streams}) != len(streams):
             raise RuntimeError("Duplicate Blu-ray stream IDs are not allowed.")
+        streams = [normalize_stream_pid(stream) for stream in streams]
     elif any(not re.fullmatch(r"[0-9]{1,4}", stream) for stream in streams):
         raise RuntimeError("DVD stream indexes must contain 1–4 decimal digits.")
     elif len({int(stream) for stream in streams}) != len(streams):
@@ -261,7 +263,8 @@ def _verify(
             reference_streams = cast(list[object], reference_streams)
             copy_streams = cast(list[object], copy_streams)
             if (len(reference_hashes) != len(reference_streams) or
-                    len(copy_hashes) != len(copy_streams) or len(reference_streams) != len(streams)):
+                    len(copy_hashes) != len(copy_streams) or
+                    (len(reference_streams) < len(streams) if bluray else len(reference_streams) != len(streams))):
                 raise RuntimeError("Could not verify every selected MKV stream.")
             if reference_hashes != copy_hashes:
                 raise RuntimeError("MKV stream content differs from the selected source streams.")

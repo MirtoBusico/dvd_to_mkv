@@ -1,0 +1,901 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: dvd-to-mkv\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Restart to apply the language. Some messages remain in English."
+msgstr ""
+
+msgid "GUI _language"
+msgstr ""
+
+msgid "System default"
+msgstr ""
+
+msgid "Browse"
+msgstr ""
+
+msgid "Discover Titles"
+msgstr ""
+
+msgid "DVD _title"
+msgstr ""
+
+msgid "Title 1 (default)"
+msgstr ""
+
+msgid "Choose output MKV"
+msgstr ""
+
+msgid "Choose output directory"
+msgstr ""
+
+msgid "Preferences unavailable"
+msgstr ""
+
+msgid "Source"
+msgstr ""
+
+msgid "Media"
+msgstr ""
+
+msgid "Automatic (MVC → original M2TS)"
+msgstr ""
+
+msgid "MKV (2D / selected streams)"
+msgstr ""
+
+msgid "Original M2TS (all streams)"
+msgstr ""
+
+msgid "_Blu-ray output"
+msgstr ""
+
+msgid "Output"
+msgstr ""
+
+msgid "Choose output MKV or directory"
+msgstr ""
+
+msgid "Suggested name without .mkv"
+msgstr ""
+
+msgid "_Filename"
+msgstr ""
+
+msgid "Preferences"
+msgstr ""
+
+msgid "_Minimum minutes"
+msgstr ""
+
+msgid "_Profile"
+msgstr ""
+
+msgid "Manage Profiles"
+msgstr ""
+
+msgid "Disc Details"
+msgstr ""
+
+msgid "Verify Copy"
+msgstr ""
+
+msgid "_Inspect"
+msgstr ""
+
+msgid "_Copy Selected"
+msgstr ""
+
+msgid "Select All"
+msgstr ""
+
+msgid "Show unselected"
+msgstr ""
+
+msgid "Hide unselected"
+msgstr ""
+
+msgid "No selected items. Use Show unselected to choose."
+msgstr ""
+
+msgid "No selected tracks. Use Show unselected to choose."
+msgstr ""
+
+msgid "Show unselected loaded items without changing the copy selection."
+msgstr ""
+
+msgid "Hide unselected items without changing the copy selection."
+msgstr ""
+
+msgid "Preview"
+msgstr ""
+
+msgid ""
+"Play the selected DVD title or one selected Blu-ray playlist in FFplay (2D). "
+"Preview uses the player's tracks, not the copy selections."
+msgstr ""
+
+msgid "Inspect Tracks"
+msgstr ""
+
+msgid "Select All Tracks"
+msgstr ""
+
+msgid "C_ancel"
+msgstr ""
+
+msgid "Clear _All"
+msgstr ""
+
+msgid ""
+"Reset source, output, selections, and Activity. Saved profiles and choices "
+"are kept."
+msgstr ""
+
+msgid "Ready"
+msgstr ""
+
+msgid "Operation status"
+msgstr ""
+
+msgid "Current media detection, inspection, preview, or copy status"
+msgstr ""
+
+msgid "Streams or playlists"
+msgstr ""
+
+msgid "DVD streams or Blu-ray playlists"
+msgstr ""
+
+msgid "Tracks"
+msgstr ""
+
+msgid "Select one playlist and click Inspect Tracks"
+msgstr ""
+
+msgid "Blu-ray streams"
+msgstr ""
+
+msgid "Check the video, audio, and subtitle tracks to include in the MKV"
+msgstr ""
+
+msgid "Activity"
+msgstr ""
+
+msgid "Activity output"
+msgstr ""
+
+msgid "Enter DVD device, ISO, or folder"
+msgstr ""
+
+msgid "_Source"
+msgstr ""
+
+msgid "File"
+msgstr ""
+
+msgid "Folder"
+msgstr ""
+
+msgid "Drives"
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+msgid "Verify Existing Copy"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "_Select"
+msgstr ""
+
+msgid "_Cancel"
+msgstr ""
+
+msgid "Verify"
+msgstr ""
+
+msgid ""
+"Compare an existing copy with the selected source. This rereads the source "
+"and needs temporary disk space."
+msgstr ""
+
+msgid "_Playlist"
+msgstr ""
+
+msgid "_DVD title"
+msgstr ""
+
+msgid "_Stream IDs"
+msgstr ""
+
+msgid ""
+"Enter the original stream indexes (DVD) or PIDs (Blu-ray) in copy order, "
+"separated by commas. Leave empty for original M2TS."
+msgstr ""
+
+msgid "Copy"
+msgstr ""
+
+msgid "Choose existing MKV or M2TS"
+msgstr ""
+
+msgid "Manage profiles"
+msgstr ""
+
+msgid "Save"
+msgstr ""
+
+msgid "New"
+msgstr ""
+
+msgid "Delete"
+msgstr ""
+
+msgid "Automatic"
+msgstr ""
+
+msgid "Original M2TS"
+msgstr ""
+
+msgid "_Name"
+msgstr ""
+
+msgid "_Audio languages"
+msgstr ""
+
+msgid "_Subtitle languages"
+msgstr ""
+
+msgid "Media mode selected manually"
+msgstr ""
+
+msgid "Choose ISO or image file"
+msgstr ""
+
+msgid "Choose source folder"
+msgstr ""
+
+msgid "Choose output"
+msgstr ""
+
+msgid "Choose a source"
+msgstr ""
+
+msgid "Preserve all streams?"
+msgstr ""
+
+msgid "Playlist {playlist}: preserve all streams as M2TS?"
+msgstr ""
+
+msgid ""
+"Your filtered selection cannot be applied to original M2TS. Both video views "
+"and all audio/subtitles will be copied."
+msgstr ""
+
+msgid "OK"
+msgstr ""
+
+msgid "Choose existing copy"
+msgstr ""
+
+msgid "{phase} (percentage and ETA unavailable)"
+msgstr ""
+
+msgid "unavailable"
+msgstr ""
+
+msgid "{phase} {fraction:.0%} - phase ETA {remaining}"
+msgstr ""
+
+msgid "Cancelling..."
+msgstr ""
+
+msgid "Verification failed"
+msgstr ""
+
+msgid "Verification completed"
+msgstr ""
+
+msgid "Copy failed"
+msgstr ""
+
+msgid "Copy completed"
+msgstr ""
+
+msgid "The operation could not be completed. Open Activity for details."
+msgstr ""
+
+msgid ""
+"The copy passed the requested verification checks. Open Activity for the "
+"report."
+msgstr ""
+
+msgid "The selected copy operation completed. Open Activity for details."
+msgstr ""
+
+msgid "Close DVD to MKV?"
+msgstr ""
+
+msgid "Stop the current operation and close?"
+msgstr ""
+
+msgid "Close?"
+msgstr ""
+
+msgid ""
+"Source settings could not be saved. Closing now will discard those changes."
+msgstr ""
+
+msgid ""
+"Source settings have not been saved because the source was not identified. "
+"Closing now will discard those changes."
+msgstr ""
+
+msgid "No"
+msgstr ""
+
+msgid "Retry Save"
+msgstr ""
+
+msgid "Yes"
+msgstr ""
+
+msgid "Preferences not saved"
+msgstr ""
+
+msgid "Copy Summary"
+msgstr ""
+
+msgid "Start Copy"
+msgstr ""
+
+msgid "No playlists found"
+msgstr ""
+
+msgid "No streams found"
+msgstr ""
+
+msgid "Stream inspection failed"
+msgstr ""
+
+msgid "Awaiting copy confirmation"
+msgstr ""
+
+msgid "Selected tracks"
+msgstr ""
+
+msgid "Playlist {playlist}:"
+msgstr ""
+
+msgid "All tracks (original M2TS; filtering is not applied)."
+msgstr ""
+
+msgid "All source tracks (not individually inspected)."
+msgstr ""
+
+msgid "language unspecified"
+msgstr ""
+
+msgid "Preparing copy summary..."
+msgstr ""
+
+msgid "Copying..."
+msgstr ""
+
+msgid "Previewing..."
+msgstr ""
+
+msgid "Source: {path}"
+msgstr ""
+
+msgid "Cannot estimate playlist {playlist}: {error}"
+msgstr ""
+
+msgid "Invalid source size"
+msgstr ""
+
+msgid "Playlist {playlist} - {format}"
+msgstr ""
+
+msgid "DVD title {playlist} - {format}"
+msgstr ""
+
+msgid "Output: {path}"
+msgstr ""
+
+msgid ""
+"All streams will be retained, including both video views and all audio/"
+"subtitles."
+msgstr ""
+
+msgid "Chapter sidecar (if chapters exist): {path}"
+msgstr ""
+
+msgid ""
+"Estimated peak space including temporary files and reserve: {gib:.2f} GiB "
+"({size} bytes)"
+msgstr ""
+
+msgid "Available space: {gib:.2f} GiB ({size} bytes)"
+msgstr ""
+
+msgid ""
+"Conservative estimate, not the final output size. Free space is checked "
+"again when copying."
+msgstr ""
+
+msgid "Not enough free space for this copy selection."
+msgstr ""
+
+msgid "e.g. eng, jpn"
+msgstr ""
+
+msgid "e.g. eng"
+msgstr ""
+
+msgid "A profile with that name already exists; select it to edit it."
+msgstr ""
+
+msgid "Profile saved, but not applied; see Activity for details."
+msgstr ""
+
+msgid "Profile updated; save queued."
+msgstr ""
+
+msgid "Profile saved."
+msgstr ""
+
+msgid "The Default profile cannot be deleted."
+msgstr ""
+
+msgid "Profile deleted, but the replacement was not applied; see Activity."
+msgstr ""
+
+msgid "Profile deleted; save queued."
+msgstr ""
+
+msgid "Profile deleted."
+msgstr ""
+
+msgid "Detecting media type..."
+msgstr ""
+
+msgid "Detection failed - select DVD or Blu-ray manually"
+msgstr ""
+
+msgid "Detected Blu-ray"
+msgstr ""
+
+msgid "Detected DVD"
+msgstr ""
+
+msgid "File selection failed - see Activity"
+msgstr ""
+
+msgid "_Copy"
+msgstr ""
+
+msgid "_Output"
+msgstr ""
+
+msgid "Verifying copy..."
+msgstr ""
+
+msgid "Preparing preview..."
+msgstr ""
+
+msgid "Validating output..."
+msgstr ""
+
+msgid "Inspecting..."
+msgstr ""
+
+msgid "Completed"
+msgstr ""
+
+msgid "Cancelled"
+msgstr ""
+
+msgid "Failed"
+msgstr ""
+
+msgid "Verified"
+msgstr ""
+
+msgid "Loading preferences..."
+msgstr ""
+
+msgid "Operation progress"
+msgstr ""
+
+msgid "Current phase progress and estimated time remaining, when available"
+msgstr ""
+
+msgid ""
+"List DVD titles using lsdvd. Duration and track counts are hints, not "
+"automatic selection."
+msgstr ""
+
+msgid "Drives (cancelling...)"
+msgstr ""
+
+msgid "Drives (scanning...)"
+msgstr ""
+
+msgid "Cancelling drive scan..."
+msgstr ""
+
+msgid "Scanning drives..."
+msgstr ""
+
+msgid "Scan failed; see Activity"
+msgstr ""
+
+msgid "No optical drives found"
+msgstr ""
+
+msgid "Refresh drives"
+msgstr ""
+
+msgid "Title {title} (previously selected)"
+msgstr ""
+
+msgid "Preferences are still saving"
+msgstr ""
+
+msgid ""
+"The preferences save is taking longer than expected. Closing anyway may lose "
+"pending changes; the in-progress write may still complete after closing, and "
+"its durability is not confirmed. A temporary file may remain."
+msgstr ""
+
+msgid "Cancel Closing"
+msgstr ""
+
+msgid "Close Anyway"
+msgstr ""
+
+msgid "Wait"
+msgstr ""
+
+msgid "Preferences were not safely saved"
+msgstr ""
+
+msgid "Close Without Saving"
+msgstr ""
+
+msgid "Retry"
+msgstr ""
+
+msgid "Streams for playlist {playlist}"
+msgstr ""
+
+msgid "Notes"
+msgstr ""
+
+msgid "Details truncated to keep the view responsive."
+msgstr ""
+
+msgid ""
+"These are reported metadata, not a full-disc integrity or playback check."
+msgstr ""
+
+msgid "Blu-ray disc"
+msgstr ""
+
+msgid ""
+"A disc's 3D label does not verify MVC in every playlist; candidate playlists "
+"are only hints."
+msgstr ""
+
+msgid ""
+"Select one playlist and open Disc Details again for its tracks and chapter "
+"markers."
+msgstr ""
+
+msgid "Playlist {id}"
+msgstr ""
+
+msgid "Playlist {id} / {kind} {pid}"
+msgstr ""
+
+msgid "Playlist {id} {kind}"
+msgstr ""
+
+msgid "DVD / title {id}"
+msgstr ""
+
+msgid "DVD title {id}"
+msgstr ""
+
+msgid "DVD details cover title {id}; this is not a list of every DVD title."
+msgstr ""
+
+msgid "Stream {id}"
+msgstr ""
+
+msgid "Chapter {index:03d}"
+msgstr ""
+
+msgid "Chapter {index:03d} (seconds)"
+msgstr ""
+
+msgid "{name} / chapters"
+msgstr ""
+
+msgid "{name} chapters"
+msgstr ""
+
+msgid "{name}: showing the first {limit} of {count} entries."
+msgstr ""
+
+msgid "{gib:.2f} GiB ({size} bytes)"
+msgstr ""
+
+msgid "Playlist size"
+msgstr ""
+
+msgid "Playlists"
+msgstr ""
+
+msgid "DVD tracks"
+msgstr ""
+
+msgid "Name"
+msgstr ""
+
+msgid "Volume label"
+msgstr ""
+
+msgid "Reported titles"
+msgstr ""
+
+msgid "Main feature candidate"
+msgstr ""
+
+msgid "Longest playlist candidate"
+msgstr ""
+
+msgid "3D content reported"
+msgstr ""
+
+msgid "Initial mode"
+msgstr ""
+
+msgid "AACS reported"
+msgstr ""
+
+msgid "BD+ reported"
+msgstr ""
+
+msgid "Java menus"
+msgstr ""
+
+msgid "Reported duration"
+msgstr ""
+
+msgid "Angles"
+msgstr ""
+
+msgid "Chapters"
+msgstr ""
+
+msgid "Codec"
+msgstr ""
+
+msgid "Codec name"
+msgstr ""
+
+msgid "Language"
+msgstr ""
+
+msgid "Format"
+msgstr ""
+
+msgid "Aspect ratio"
+msgstr ""
+
+msgid "Frame rate"
+msgstr ""
+
+msgid "Reported sample rate"
+msgstr ""
+
+msgid "Duration (seconds)"
+msgstr ""
+
+msgid "Reported streams"
+msgstr ""
+
+msgid "Type"
+msgstr ""
+
+msgid "Profile"
+msgstr ""
+
+msgid "Width"
+msgstr ""
+
+msgid "Height"
+msgstr ""
+
+msgid "Channels"
+msgstr ""
+
+msgid "Channel layout"
+msgstr ""
+
+msgid "Sample rate (Hz)"
+msgstr ""
+
+msgid "Count"
+msgstr ""
+
+msgid "video"
+msgstr ""
+
+msgid "audio"
+msgstr ""
+
+msgid "subtitles"
+msgstr ""
+
+msgid "main feature candidate"
+msgstr ""
+
+msgid "longest candidate"
+msgstr ""
+
+msgid "longest listed duration"
+msgstr ""
+
+msgid "40+ minutes"
+msgstr ""
+
+#, python-brace-format
+msgid "Playlist {id}    {duration}    {chapters} chapters"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Title {id}    {duration}    {chapters} chapters, {audio} audio, {subtitles} "
+"subtitles"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Playlist {playlist}: original M2TS preserves ALL streams (filtering disabled)"
+msgstr ""
+
+#, python-brace-format
+msgid "Streams for playlist {playlist} — MKV"
+msgstr ""
+
+msgid "Use DVD mode to inspect and copy one title at a time."
+msgstr ""
+
+msgid "Use Blu-ray mode to inspect and copy playlists."
+msgstr ""
+
+msgid "Open a disc image as the source."
+msgstr ""
+
+msgid "Use a folder containing a DVD or Blu-ray as the source."
+msgstr ""
+
+msgid "Show detected optical drives and scan for changes."
+msgstr ""
+
+msgid "Use the disc in this drive as the source."
+msgstr ""
+
+msgid "Scan again for optical drives and inserted discs."
+msgstr ""
+
+msgid "Choose where the copied video will be saved."
+msgstr ""
+
+msgid "Create or edit reusable language and output settings."
+msgstr ""
+
+msgid "View reported disc or playlist metadata without copying."
+msgstr ""
+
+msgid "Compare a saved copy with the original source."
+msgstr ""
+
+msgid "List tracks for the selected DVD title or playlists on the Blu-ray."
+msgstr ""
+
+msgid "Review the selected content and output paths before copying."
+msgstr ""
+
+msgid "Select all inspected DVD tracks or Blu-ray playlists, including hidden items."
+msgstr ""
+
+msgid ""
+"List the video, audio, and subtitle tracks in one selected Blu-ray playlist."
+msgstr ""
+
+msgid "Include every inspected track from the playlist, including hidden tracks."
+msgstr ""
+
+msgid "Request cancellation of the current operation."
+msgstr ""
+
+msgid "Include this item in the copy selection."
+msgstr ""
+
+msgid "Choose the MKV or M2TS file to verify."
+msgstr ""
+
+msgid "Start copying with the settings shown in the summary."
+msgstr ""
+
+msgid "Return to the main window without starting the copy."
+msgstr ""
+
+msgid "Return to the main window without changing the selection."
+msgstr ""
+
+msgid "Return to the main window without verifying the copy."
+msgstr ""
+
+msgid "Reread the source and compare it with the saved copy."
+msgstr ""
+
+msgid "Close the editor without saving any pending edits."
+msgstr ""
+
+msgid "Save the current profile settings and apply the profile."
+msgstr ""
+
+msgid "Clear the form to create a new profile."
+msgstr ""
+
+msgid "Remove the selected custom profile."
+msgstr ""
+
+msgid "Keep all tracks in the original M2TS without filtering."
+msgstr ""
+
+msgid "Keep the current filtered track selection."
+msgstr ""
+
+msgid "Close the application without waiting for preferences to load."
+msgstr ""
+
+msgid "Continue without saving settings for this session."
+msgstr ""
+
+msgid "Keep waiting for preferences to load."
+msgstr ""
+
+msgid "Keep the application open."
+msgstr ""
+
+msgid "Try saving the pending settings again."
+msgstr ""
+
+msgid "Close the application, stopping any active operation."
+msgstr ""
+
+msgid "Keep waiting for the current save to finish."
+msgstr ""
+
+msgid "Close now even if pending settings may be lost."
+msgstr ""
+
+msgid "Close without saving the pending settings."
+msgstr ""

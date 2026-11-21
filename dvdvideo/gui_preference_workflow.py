@@ -52,6 +52,7 @@ class PreferenceSelectionHooks:
     set_visible_selection: Callable[[set[str], bool], None]
     clear_hidden_selections: Callable[[], bool]
     update_stream_format: Callable[[str], None]
+    reset_visibility: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,7 @@ class PreferenceWorkflow:
             self.selection.clear_profile_selection_edits(is_bluray=is_bluray)
         if self.selection.stream_playlist is not None:
             self.hooks.selection.update_stream_format(self.selection.stream_playlist)
+        self.hooks.selection.reset_visibility()
         self.save_current_source_preferences()
         return True
 

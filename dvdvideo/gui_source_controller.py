@@ -36,6 +36,7 @@ class SourceUiHooks:
     apply_detected_media: Callable[[str], None]
     exclude_device: Callable[[str], None]
     confirm_non_device: Callable[[str], None] = lambda _source: None
+    update_title_sensitivity: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ class SourceController:
         self.hooks.ui.prepare_source(source)
         if source:
             self.workflow.detecting = True
+            self.hooks.ui.update_title_sensitivity()
             self.hooks.ui.set_status("Detecting media type...")
             self.workflow.schedule_detection(source, self.hooks.runtime.schedule_detection)
         else:
@@ -86,6 +88,7 @@ class SourceController:
 
     def cancel_detection(self) -> None:
         self.workflow.cancel_detection(self.hooks.runtime.remove_timeout)
+        self.hooks.ui.update_title_sensitivity()
 
     def start_detection(self, source: str, generation: int) -> bool:
         if self.hooks.runtime.is_closing() or generation != self.workflow.detection_generation:
@@ -156,6 +159,7 @@ class SourceController:
             source, generation, self.hooks.ui.get_source(), closing=self.hooks.runtime.is_closing(),
         ):
             return
+        self.hooks.ui.update_title_sensitivity()
         if error:
             self.hooks.log(f"Media detection failed: {error}")
             self.hooks.ui.set_status("Detection failed - select DVD or Blu-ray manually")
@@ -167,7 +171,10 @@ class SourceController:
             self.hooks.ui.apply_detected_media(media or "dvd")
         finally:
             self.workflow.applying_detection = False
-        self.hooks.ui.set_status(f"Detected {'Blu-ray' if media == 'bluray' else 'DVD'}")
+        if media == "bluray":
+            self.hooks.ui.set_status("Detected Blu-ray")
+        else:
+            self.hooks.ui.set_status("Detected DVD")
         self.hooks.log(f"Detected {'Blu-ray' if media == 'bluray' else 'DVD'} source.")
 
     def scan_drives(self) -> None:
